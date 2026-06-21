@@ -210,6 +210,15 @@ input[type=text]:focus { border-color: var(--primary); }
   background: #f0f4ff;
 }
 .dart-link:hover { background: #e8f0fe; }
+.btn-tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  margin-left: 8px;
+  background: #229ED9;
+  color: white;
+}
 .loading-msg { color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .spin {
   width: 16px; height: 16px;
@@ -403,15 +412,43 @@ async function onDiscClick(idx, el) {
       : '';
     const dartUrl = `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${d.rcept_no}`;
 
+    window._lastInterpret = {d, summary: res.summary, price_info: pi};
+
     document.getElementById('gptBody').innerHTML =
       `<div class="gpt-corp">[${d.corp_name}] ${d.report_nm}</div>
        <div class="gpt-date">접수일: ${d.rcept_dt}</div>
        ${priceHtml}
        <hr class="gpt-divider">
        <div class="gpt-text">${res.summary}</div>
-       <a class="dart-link" href="${dartUrl}" target="_blank">📄 DART 원문 보기</a>`;
+       <a class="dart-link" href="${dartUrl}" target="_blank">📄 DART 원문 보기</a>
+       <button class="btn-tg" onclick="sendTelegram(this)">📨 텔레그램으로 보내기</button>`;
   } catch(e) {
     document.getElementById('gptBody').innerHTML = `<p style="color:red">❌ 오류 발생</p>`;
+  }
+}
+
+async function sendTelegram(btn) {
+  const li = window._lastInterpret;
+  if (!li) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '전송 중...';
+  try {
+    const r = await fetch('/api/send_telegram', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        corp_name: li.d.corp_name, report_nm: li.d.report_nm,
+        rcept_dt: li.d.rcept_dt, rcept_no: li.d.rcept_no,
+        summary: li.summary, price_info: li.price_info
+      })
+    });
+    const res = await r.json();
+    btn.textContent = res.sent ? '✅ 전송 완료' : '❌ 전송 실패';
+  } catch(e) {
+    btn.textContent = '❌ 전송 실패';
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2500);
   }
 }
 

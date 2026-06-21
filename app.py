@@ -168,14 +168,25 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
 
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return False
     try:
-        http.post(
+        r = http.post(
             f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
             json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'},
             timeout=10)
+        return r.ok
     except Exception as e:
         _log(f'텔레그램 전송 실패: {e}')
+        return False
+
+def build_telegram_message(corp_name, report_nm, rcept_dt, rcept_no, summary, price_info=None):
+    dart_url   = f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}'
+    price_line = (f'\n주가: {price_info["price_str"]}  |  거래량: {price_info["volume_str"]}'
+                  if price_info else '')
+    return (f'📢 <b>[{corp_name}] {report_nm}</b>\n'
+            f'접수일: {rcept_dt}{price_line}\n\n'
+            f'{summary}\n\n'
+            f'<a href="{dart_url}">📄 DART 원문 보기</a>')
 
 # ── monitor loop ───────────────────────────────────────
 def monitor_loop():
@@ -197,13 +208,8 @@ def monitor_loop():
                             price_info = get_stock_price(sc)
                             content    = fetch_disclosure_text(disc['rcept_no'])
                             summary    = interpret_with_gpt(cn, disc['report_nm'], content, price_info)
-                            dart_url   = f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={disc["rcept_no"]}'
-                            price_line = (f'\n주가: {price_info["price_str"]}  |  거래량: {price_info["volume_str"]}'
-                                          if price_info else '')
-                            msg = (f'📢 <b>[{cn}] {disc["report_nm"]}</b>\n'
-                                   f'접수일: {disc["rcept_dt"]}{price_line}\n\n'
-                                   f'{summary}\n\n'
-                                   f'<a href="{dart_url}">📄 DART 원문 보기</a>')
+                            msg = build_telegram_message(cn, disc['report_nm'], disc['rcept_dt'],
+                                                          disc['rcept_no'], summary, price_info)
                             send_telegram(msg)
                         except Exception as te:
                             _log(f'텔레그램 전송 실패: {te}')
@@ -270,6 +276,17 @@ def api_interpret():
         content    = fetch_disclosure_text(data.get('rcept_no'))
         summary    = interpret_with_gpt(data.get('corp_name'), data.get('report_nm'), content, price_info)
         return jsonify({'summary': summary, 'price_info': price_info})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/send_telegram', methods=['POST'])
+def api_send_telegram():
+    data = request.json or {}
+    try:
+        msg = build_telegram_message(data.get('corp_name'), data.get('report_nm'),
+                                      data.get('rcept_dt'), data.get('rcept_no'),
+                                      data.get('summary'), data.get('price_info'))
+        return jsonify({'sent': send_telegram(msg)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
