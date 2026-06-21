@@ -3,7 +3,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, render_template
 import requests as http
-import yfinance as yf
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -12,6 +11,8 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 DART_API_KEY       = os.getenv('DART_API_KEY')
 OPENAI_API_KEY     = os.getenv('OPENAI_API_KEY')
+KIS_APP_KEY        = os.getenv('KIS_APP_KEY')
+KIS_APP_SECRET     = os.getenv('KIS_APP_SECRET')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
 
@@ -109,26 +110,44 @@ def get_disclosures(corp_code, days=1):
     d = r.json()
     return d.get('list', []) if d.get('status') == '000' else []
 
+_kis_cache = {'token': None, 'expires_at': 0}
+
+def get_kis_token():
+    if _kis_cache['token'] and time.time() < _kis_cache['expires_at']:
+        return _kis_cache['token']
+    r = http.post('https://openapi.koreainvestment.com:9443/oauth2/tokenP',
+                  headers={'content-type': 'application/json'},
+                  json={'grant_type': 'client_credentials',
+                        'appkey': KIS_APP_KEY, 'appsecret': KIS_APP_SECRET}, timeout=10)
+    token = r.json().get('access_token')
+    _kis_cache.update({'token': token, 'expires_at': time.time() + 86340})
+    return token
+
 def get_stock_price(stock_code):
-    """KIS API는 해외 서버에서 접근 제한이 있어 야후 파이낸스로 대체. 코스피(.KS)→코스닥(.KQ) 순으로 시도."""
     if not stock_code:
         return None
-    for suffix in ('.KS', '.KQ'):
-        try:
-            hist = yf.Ticker(f'{stock_code}{suffix}').history(period='5d')
-            if hist.empty:
-                continue
-            price      = hist['Close'].iloc[-1]
-            volume     = int(hist['Volume'].iloc[-1])
-            prev_close = hist['Close'].iloc[-2] if len(hist) >= 2 else price
-            change     = (price - prev_close) / prev_close * 100 if prev_close else 0.0
-            arrow      = '▲' if change > 0 else '▼' if change < 0 else '-'
-            return {'price_str': f'{price:,.0f}원 ({arrow}{abs(change):.2f}%)',
-                    'volume_str': f'{volume:,}주',
-                    'price': float(price), 'change': float(change), 'volume': volume}
-        except Exception:
-            continue
-    return None
+    try:
+        token = get_kis_token()
+        r = http.get(
+            'https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price',
+            headers={'content-type': 'application/json',
+                     'authorization': f'Bearer {token}',
+                     'appkey': KIS_APP_KEY, 'appsecret': KIS_APP_SECRET,
+                     'tr_id': 'FHKST01010100'},
+            params={'FID_COND_MRKT_DIV_CODE': 'J', 'FID_INPUT_ISCD': stock_code}, timeout=10)
+        out = r.json().get('output', {})
+        if not out:
+            return None
+        sign   = out.get('prdy_vrss_sign', '3')
+        arrow  = '▲' if sign in ('1','2') else '▼' if sign in ('4','5') else '-'
+        price  = int(out.get('stck_prpr', 0))
+        change = float(out.get('prdy_ctrt', 0))
+        volume = int(out.get('acml_vol', 0))
+        return {'price_str': f"{price:,}원 ({arrow}{abs(change):.2f}%)",
+                'volume_str': f"{volume:,}주",
+                'price': price, 'change': change, 'volume': volume}
+    except:
+        return None
 
 def fetch_disclosure_text(rcept_no, max_chars=4000):
     try:
