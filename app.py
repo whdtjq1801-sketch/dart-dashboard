@@ -83,11 +83,13 @@ def build_interest_dict(corp_map, names):
     if os.path.exists(STOCK_CACHE_FILE):
         with open(STOCK_CACHE_FILE, 'r', encoding='utf-8') as f:
             stock_cache = json.load(f)
+    corp_map_ci = {k.upper(): k for k in corp_map}
     idict, sdict, updated = {}, {}, False
     for name in names:
-        if name not in corp_map:
+        matched = corp_map_ci.get(name.upper())
+        if not matched:
             continue
-        corp_code  = corp_map[name]
+        corp_code  = corp_map[matched]
         stock_code = stock_cache.get(name) or get_stock_code(corp_code)
         if name not in stock_cache:
             stock_cache[name] = stock_code
