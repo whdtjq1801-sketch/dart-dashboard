@@ -1,7 +1,10 @@
 import os, json, time, re, zipfile, io, threading
+import csv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 import requests as http
 import yfinance as yf
 from openai import OpenAI
@@ -14,6 +17,8 @@ DART_API_KEY       = os.getenv('DART_API_KEY')
 OPENAI_API_KEY     = os.getenv('OPENAI_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
+DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN")
 
 SEEN_FILE        = os.path.join(BASE_DIR, 'seen_disclosures.json')
 CORP_CACHE_FILE  = os.path.join(BASE_DIR, 'corp_map_cache.json')
@@ -32,6 +37,21 @@ _logs_lock    = threading.Lock()
 _interval_min = 60
 
 # ── helpers ────────────────────────────────────────────
+def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다.")
+    return psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor
+    )
+
+def get_user_key():
+    return (
+        request.headers.get("X-User-Key")
+        or request.remote_addr
+        or "unknown"
+    )
+
 def _log(msg):
     ts = datetime.now().strftime('%H:%M:%S')
     with _logs_lock:
@@ -48,6 +68,149 @@ def load_seen():
 def save_seen():
     with open(SEEN_FILE, 'w') as f:
         json.dump(list(_seen), f)
+
+def init_db():
+    sql = """
+    CREATE TABLE IF NOT EXISTS search_logs (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        ip_address VARCHAR(50),
+        user_agent TEXT,
+        keyword VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS disclosure_results (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        corp_name VARCHAR(100),
+        stock_code VARCHAR(20),
+        rcept_no VARCHAR(30),
+        report_nm VARCHAR(300),
+        rcept_dt VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_key, rcept_no)
+    );
+
+    CREATE TABLE IF NOT EXISTS disclosure_interpretations (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        corp_name VARCHAR(100),
+        stock_code VARCHAR(20),
+        rcept_no VARCHAR(30),
+        report_nm VARCHAR(300),
+        summary TEXT,
+        price NUMERIC(20, 4),
+        change_rate NUMERIC(10, 4),
+        volume BIGINT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS telegram_send_logs (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        rcept_no VARCHAR(30),
+        corp_name VARCHAR(100),
+        report_nm VARCHAR(300),
+        sent BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+
+def save_search_log(keyword):
+    sql = """
+        INSERT INTO search_logs
+        (user_key, ip_address, user_agent, keyword)
+        VALUES (%s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                request.remote_addr,
+                request.headers.get("User-Agent", ""),
+                keyword
+            ))
+
+
+def save_disclosure_result(item):
+    sql = """
+        INSERT INTO disclosure_results
+        (user_key, corp_name, stock_code, rcept_no, report_nm, rcept_dt)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_key, rcept_no)
+        DO UPDATE SET
+            corp_name = EXCLUDED.corp_name,
+            stock_code = EXCLUDED.stock_code,
+            report_nm = EXCLUDED.report_nm,
+            rcept_dt = EXCLUDED.rcept_dt
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                item.get("corp_name"),
+                item.get("stock_code"),
+                item.get("rcept_no"),
+                item.get("report_nm"),
+                item.get("rcept_dt")
+            ))
+
+
+def save_interpretation(data, summary, price_info):
+    price = None
+    change_rate = None
+    volume = None
+
+    if price_info:
+        price = price_info.get("price")
+        change_rate = price_info.get("change")
+        volume = price_info.get("volume")
+
+    sql = """
+        INSERT INTO disclosure_interpretations
+        (user_key, corp_name, stock_code, rcept_no, report_nm, summary, price, change_rate, volume)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                data.get("corp_name"),
+                data.get("stock_code"),
+                data.get("rcept_no"),
+                data.get("report_nm"),
+                summary,
+                price,
+                change_rate,
+                volume
+            ))
+
+
+def save_telegram_log(data, sent):
+    sql = """
+        INSERT INTO telegram_send_logs
+        (user_key, rcept_no, corp_name, report_nm, sent)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                data.get("rcept_no"),
+                data.get("corp_name"),
+                data.get("report_nm"),
+                sent
+            ))
+
 
 def download_corp_codes():
     resp = http.get('https://opendart.fss.or.kr/api/corpCode.xml',
@@ -150,20 +313,40 @@ def fetch_disclosure_text(rcept_no, max_chars=4000):
 def interpret_with_gpt(corp_name, report_name, content, price_info=None):
     price_text = ''
     if price_info:
-        price_text = (f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
-                      f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n")
+        price_text = (
+            f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
+            f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n"
+        )
+
+    rule = (
+        "작성 규칙: "
+        "300자 이내. 존대 금지. 간략한 어투. "
+        "최대한 많은 정보를 압축해서 담아. "
+        "투자자 관점에서 핵심 의미, 긍정 요인, 부정 요인, 확인할 점을 포함해. "
+        "주가 등락은 직접 반영하지 말고 공시의 본질과 사업적 의미만 봐. "
+        "불확실한 내용은 추정이라고 표시해."
+    )
+
     if content:
-        prompt = (f"다음은 '{corp_name}'의 DART 공시 '{report_name}' 원문이야.{price_text}\n"
-                  f"공시 내용 자체에 집중해서 200자 내외로 핵심을 요약하고 투자자 관점에서 의미를 설명해줘. "
-                  f"주가 등락은 해석에 직접 반영하지 말고, 공시의 본질적 내용과 사업적 의미에 초점을 맞춰줘.\n\n{content}")
+        prompt = (
+            f"다음은 '{corp_name}'의 DART 공시 '{report_name}' 원문이야."
+            f"{price_text}\n"
+            f"{rule}\n\n"
+            f"{content}"
+        )
     else:
-        prompt = (f"DART 공시 제목: '{corp_name}' - '{report_name}'{price_text}\n"
-                  f"이 공시의 사업적 의미를 투자자 관점에서 200자 내외로 설명해줘. "
-                  f"주가 등락은 해석에 직접 반영하지 말고 공시 내용의 본질에 집중해줘.")
+        prompt = (
+            f"DART 공시 제목: '{corp_name}' - '{report_name}'"
+            f"{price_text}\n"
+            f"{rule}"
+        )
+
     resp = openai_client.chat.completions.create(
         model='gpt-4o-mini',
         messages=[{'role': 'user', 'content': prompt}],
-        max_tokens=300, temperature=0.3)
+        max_tokens=500,
+        temperature=0.2
+    )
     return resp.choices[0].message.content
 
 def send_telegram(message):
@@ -235,8 +418,13 @@ def api_get_companies():
 @app.route('/api/companies', methods=['POST'])
 def api_add_company():
     name = (request.json or {}).get('name', '').strip()
+
+    if name:
+        save_search_log(name)
+
     if name and name not in _companies:
         _companies.append(name)
+
     return jsonify(_companies)
 
 @app.route('/api/companies/<path:name>', methods=['DELETE'])
@@ -274,7 +462,15 @@ def api_interpret():
     try:
         price_info = get_stock_price(data.get('stock_code'))
         content    = fetch_disclosure_text(data.get('rcept_no'))
-        summary    = interpret_with_gpt(data.get('corp_name'), data.get('report_nm'), content, price_info)
+        summary    = interpret_with_gpt(
+            data.get('corp_name'),
+            data.get('report_nm'),
+            content,
+            price_info
+        )
+
+        save_interpretation(data, summary, price_info)
+
         return jsonify({'summary': summary, 'price_info': price_info})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -312,6 +508,13 @@ def api_status():
     with _logs_lock:
         logs = list(_logs[-8:])
     return jsonify({'running': _monitor_on, 'interval': _interval_min, 'logs': logs})
+
+try:
+    init_db()
+    print("DB 초기화 완료", flush=True)
+except Exception as e:
+    print(f"DB 초기화 실패: {e}", flush=True)
+
 
 if __name__ == '__main__':
     load_seen()
