@@ -398,8 +398,13 @@ def api_get_companies():
 @app.route('/api/companies', methods=['POST'])
 def api_add_company():
     name = (request.json or {}).get('name', '').strip()
+
+    if name:
+        save_search_log(name)
+
     if name and name not in _companies:
         _companies.append(name)
+
     return jsonify(_companies)
 
 @app.route('/api/companies/<path:name>', methods=['DELETE'])
