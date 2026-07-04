@@ -313,22 +313,40 @@ def fetch_disclosure_text(rcept_no, max_chars=4000):
 def interpret_with_gpt(corp_name, report_name, content, price_info=None):
     price_text = ''
     if price_info:
-        price_text = (f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
-                      f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n")
+        price_text = (
+            f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
+            f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n"
+        )
+
+    rule = (
+        "작성 규칙: "
+        "300자 이내. 존대 금지. 간략한 어투. "
+        "최대한 많은 정보를 압축해서 담아. "
+        "투자자 관점에서 핵심 의미, 긍정 요인, 부정 요인, 확인할 점을 포함해. "
+        "주가 등락은 직접 반영하지 말고 공시의 본질과 사업적 의미만 봐. "
+        "불확실한 내용은 추정이라고 표시해."
+    )
+
     if content:
-        prompt = (f"공시 내용 자체에 집중해 300자 이내로 요약해. "
-                    f"존대하지 말고 간략한 어투로 써. "
-                    f"최대한 많은 정보를 압축해서 담아. "
-                    f"투자자 관점에서 핵심 의미, 긍정/부정 요인, 확인할 점을 포함해. "
-                    f"주가 등락은 직접 반영하지 말고 공시의 본질과 사업적 의미만 봐.\n\n{content}"))
+        prompt = (
+            f"다음은 '{corp_name}'의 DART 공시 '{report_name}' 원문이야."
+            f"{price_text}\n"
+            f"{rule}\n\n"
+            f"{content}"
+        )
     else:
-        prompt = (f"DART 공시 제목: '{corp_name}' - '{report_name}'{price_text}\n"
-                  f"이 공시의 사업적 의미를 투자자 관점에서 200자 내외로 설명해줘. "
-                  f"주가 등락은 해석에 직접 반영하지 말고 공시 내용의 본질에 집중해줘.")
+        prompt = (
+            f"DART 공시 제목: '{corp_name}' - '{report_name}'"
+            f"{price_text}\n"
+            f"{rule}"
+        )
+
     resp = openai_client.chat.completions.create(
         model='gpt-4o-mini',
         messages=[{'role': 'user', 'content': prompt}],
-        max_tokens=300, temperature=0.3)
+        max_tokens=500,
+        temperature=0.2
+    )
     return resp.choices[0].message.content
 
 def send_telegram(message):
