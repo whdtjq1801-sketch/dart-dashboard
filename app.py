@@ -442,7 +442,15 @@ def api_interpret():
     try:
         price_info = get_stock_price(data.get('stock_code'))
         content    = fetch_disclosure_text(data.get('rcept_no'))
-        summary    = interpret_with_gpt(data.get('corp_name'), data.get('report_nm'), content, price_info)
+        summary    = interpret_with_gpt(
+            data.get('corp_name'),
+            data.get('report_nm'),
+            content,
+            price_info
+        )
+
+        save_interpretation(data, summary, price_info)
+
         return jsonify({'summary': summary, 'price_info': price_info})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
