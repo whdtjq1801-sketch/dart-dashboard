@@ -121,6 +121,96 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute(sql)
 
+def save_search_log(keyword):
+    sql = """
+        INSERT INTO search_logs
+        (user_key, ip_address, user_agent, keyword)
+        VALUES (%s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                request.remote_addr,
+                request.headers.get("User-Agent", ""),
+                keyword
+            ))
+
+
+def save_disclosure_result(item):
+    sql = """
+        INSERT INTO disclosure_results
+        (user_key, corp_name, stock_code, rcept_no, report_nm, rcept_dt)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_key, rcept_no)
+        DO UPDATE SET
+            corp_name = EXCLUDED.corp_name,
+            stock_code = EXCLUDED.stock_code,
+            report_nm = EXCLUDED.report_nm,
+            rcept_dt = EXCLUDED.rcept_dt
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                item.get("corp_name"),
+                item.get("stock_code"),
+                item.get("rcept_no"),
+                item.get("report_nm"),
+                item.get("rcept_dt")
+            ))
+
+
+def save_interpretation(data, summary, price_info):
+    price = None
+    change_rate = None
+    volume = None
+
+    if price_info:
+        price = price_info.get("price")
+        change_rate = price_info.get("change")
+        volume = price_info.get("volume")
+
+    sql = """
+        INSERT INTO disclosure_interpretations
+        (user_key, corp_name, stock_code, rcept_no, report_nm, summary, price, change_rate, volume)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                data.get("corp_name"),
+                data.get("stock_code"),
+                data.get("rcept_no"),
+                data.get("report_nm"),
+                summary,
+                price,
+                change_rate,
+                volume
+            ))
+
+
+def save_telegram_log(data, sent):
+    sql = """
+        INSERT INTO telegram_send_logs
+        (user_key, rcept_no, corp_name, report_nm, sent)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                get_user_key(),
+                data.get("rcept_no"),
+                data.get("corp_name"),
+                data.get("report_nm"),
+                sent
+            ))
+
 
 def download_corp_codes():
     resp = http.get('https://opendart.fss.or.kr/api/corpCode.xml',
