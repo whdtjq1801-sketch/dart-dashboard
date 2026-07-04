@@ -316,9 +316,11 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
         price_text = (f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
                       f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n")
     if content:
-        prompt = (f"다음은 '{corp_name}'의 DART 공시 '{report_name}' 원문이야.{price_text}\n"
-                  f"공시 내용 자체에 집중해서 200자 내외로 핵심을 요약하고 투자자 관점에서 의미를 설명해줘. "
-                  f"주가 등락은 해석에 직접 반영하지 말고, 공시의 본질적 내용과 사업적 의미에 초점을 맞춰줘.\n\n{content}")
+        prompt = (f"공시 내용 자체에 집중해 300자 이내로 요약해. "
+                    f"존대하지 말고 간략한 어투로 써. "
+                    f"최대한 많은 정보를 압축해서 담아. "
+                    f"투자자 관점에서 핵심 의미, 긍정/부정 요인, 확인할 점을 포함해. "
+                    f"주가 등락은 직접 반영하지 말고 공시의 본질과 사업적 의미만 봐.\n\n{content}"))
     else:
         prompt = (f"DART 공시 제목: '{corp_name}' - '{report_name}'{price_text}\n"
                   f"이 공시의 사업적 의미를 투자자 관점에서 200자 내외로 설명해줘. "
