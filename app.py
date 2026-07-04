@@ -1,7 +1,10 @@
 import os, json, time, re, zipfile, io, threading
+import csv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 import requests as http
 import yfinance as yf
 from openai import OpenAI
@@ -14,6 +17,8 @@ DART_API_KEY       = os.getenv('DART_API_KEY')
 OPENAI_API_KEY     = os.getenv('OPENAI_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
+DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN")
 
 SEEN_FILE        = os.path.join(BASE_DIR, 'seen_disclosures.json')
 CORP_CACHE_FILE  = os.path.join(BASE_DIR, 'corp_map_cache.json')
@@ -32,6 +37,21 @@ _logs_lock    = threading.Lock()
 _interval_min = 60
 
 # ── helpers ────────────────────────────────────────────
+def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다.")
+    return psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor
+    )
+
+def get_user_key():
+    return (
+        request.headers.get("X-User-Key")
+        or request.remote_addr
+        or "unknown"
+    )
+
 def _log(msg):
     ts = datetime.now().strftime('%H:%M:%S')
     with _logs_lock:
@@ -48,6 +68,59 @@ def load_seen():
 def save_seen():
     with open(SEEN_FILE, 'w') as f:
         json.dump(list(_seen), f)
+
+def init_db():
+    sql = """
+    CREATE TABLE IF NOT EXISTS search_logs (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        ip_address VARCHAR(50),
+        user_agent TEXT,
+        keyword VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS disclosure_results (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        corp_name VARCHAR(100),
+        stock_code VARCHAR(20),
+        rcept_no VARCHAR(30),
+        report_nm VARCHAR(300),
+        rcept_dt VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_key, rcept_no)
+    );
+
+    CREATE TABLE IF NOT EXISTS disclosure_interpretations (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        corp_name VARCHAR(100),
+        stock_code VARCHAR(20),
+        rcept_no VARCHAR(30),
+        report_nm VARCHAR(300),
+        summary TEXT,
+        price NUMERIC(20, 4),
+        change_rate NUMERIC(10, 4),
+        volume BIGINT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS telegram_send_logs (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(100),
+        rcept_no VARCHAR(30),
+        corp_name VARCHAR(100),
+        report_nm VARCHAR(300),
+        sent BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+
 
 def download_corp_codes():
     resp = http.get('https://opendart.fss.or.kr/api/corpCode.xml',
