@@ -476,6 +476,13 @@ def api_status():
         logs = list(_logs[-8:])
     return jsonify({'running': _monitor_on, 'interval': _interval_min, 'logs': logs})
 
+try:
+    init_db()
+    print("DB 초기화 완료", flush=True)
+except Exception as e:
+    print(f"DB 초기화 실패: {e}", flush=True)
+
+
 if __name__ == '__main__':
     load_seen()
     app.run(debug=False, port=5000, threaded=True)
