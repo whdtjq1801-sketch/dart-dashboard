@@ -4,3 +4,4 @@ openai
 python-dotenv
 gunicorn
 yfinance
+psycopg2-binary
