@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+
+# regenerated automatically from DART at runtime, no need to version them
+corp_map_cache.json
+ticker_corp_cache.json
+stock_code_cache.json
+eng_name_cache.json
+build_companies_progress.json
+
+# stray local files, not used by the app
+*.7z

@@ -1,510 +1,270 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DART 공시 대시보드</title>
+<title>DART Disclosure Search</title>
 <style>
 :root {
-  --primary:      #2563eb;
-  --primary-dark: #1d4ed8;
-  --primary-soft: #eef3ff;
-  --primary-line: #c9dbff;
-  --success:      #16a34a;
-  --danger:       #dc2626;
-  --bg:           #f5f6f8;
+  --primary:      #3161ea;
+  --primary-dark: #234fc4;
+  --primary-soft: #eef2ff;
+  --primary-line: #c9d7ff;
+  --good:         #17875a;
+  --good-soft:    #e7f5ee;
+  --warn:         #b5710a;
+  --warn-soft:    #fdf3e2;
+  --bad:          #d1403a;
+  --bad-soft:     #fdecea;
+  --ink:          #14171f;
+  --muted:        #666e7d;
+  --muted-soft:   #9aa1ad;
+  --paper:        #f5f6fa;
   --card:         #ffffff;
-  --border:       #e5e7eb;
-  --border-soft:  #eef0f2;
-  --text:         #17181c;
-  --muted:        #6b7280;
-  --muted-soft:   #9ca3af;
-  --radius:       12px;
-  --radius-sm:    8px;
-  --shadow-sm:    0 1px 2px rgba(16,24,40,.04);
-  --shadow-md:    0 2px 8px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+  --line:         #e3e6ee;
+  --line-soft:    #edeff4;
+  --radius:       14px;
+  --radius-sm:    9px;
+  --shadow-sm:    0 1px 2px rgba(20,23,31,.05);
+  --shadow-md:    0 4px 16px rgba(20,23,31,.08), 0 1px 3px rgba(20,23,31,.05);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
 body {
-  font-family: -apple-system, 'Segoe UI', 'Pretendard', sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  height: 100vh;
+  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  -webkit-font-smoothing: antialiased;
 }
+button { font-family: inherit; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
-/* ── header ── */
 header {
   background: var(--card);
-  color: var(--text);
   padding: 14px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
+  gap: 12px;
+  flex-wrap: wrap;
 }
-header h1 { font-size: 16px; font-weight: 700; letter-spacing: -.3px; display: flex; align-items: center; gap: 8px; }
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--muted);
-  background: var(--bg);
-  padding: 6px 13px;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-}
-.dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--muted-soft);
-  flex-shrink: 0;
-}
-.dot.running { background: var(--success); animation: blink 1.5s infinite; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+.brand { display: flex; flex-direction: column; gap: 1px; }
+.brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -.3px; display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.brand .sub { font-size: 11.5px; color: var(--muted-soft); padding-left: 24px; }
 
-/* ── control bar ── */
-.ctrl {
-  background: var(--card);
-  border-bottom: 1px solid var(--border);
-  padding: 10px 24px;
+/* ── onboarding tip ── */
+.tip {
+  margin: 16px 20px 0;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-line);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--primary-dark);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   flex-shrink: 0;
 }
-button {
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  transition: filter .15s, transform .1s, background .15s;
+.tip .steps { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+.tip .step { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 500; }
+.tip .step b {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--primary); color: white; font-size: 10.5px; flex-shrink: 0;
 }
-button:hover:not(:disabled) { filter: brightness(.94); }
-button:active:not(:disabled) { transform: scale(.97); }
-button:disabled { opacity: .4; cursor: default; }
-.btn-go   { background: var(--success); color: white; }
-.btn-stop { background: var(--danger);  color: white; }
-.btn-blue { background: var(--primary); color: white; }
-.btn-grey { background: var(--card); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-.btn-grey:hover:not(:disabled) { background: var(--bg); filter: none; }
-
-.interval-row { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); margin-left: 6px; padding-left: 14px; border-left: 1px solid var(--border); }
-input[type=range] { width: 130px; accent-color: var(--primary); cursor: pointer; }
+.tip .step.done { color: var(--muted-soft); text-decoration: line-through; }
+.tip .step.done b { background: var(--good); }
+.tip-close {
+  margin-left: auto; background: none; border: none; color: var(--primary-dark);
+  cursor: pointer; font-size: 16px; line-height: 1; opacity: .55; flex-shrink: 0;
+}
+.tip-close:hover { opacity: 1; }
+.tip.hidden { display: none; }
 
 /* ── main layout ── */
-.main {
-  flex: 1;
-  display: flex;
-  gap: 14px;
-  padding: 14px 20px;
-  overflow: hidden;
-}
-
+.main { flex: 1; display: flex; gap: 14px; padding: 16px 20px; overflow: hidden; }
 .panel {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden;
 }
 .panel-left  { flex: 0 0 380px; }
 .panel-right { flex: 1; min-width: 0; }
 
 /* ── tabs ── */
-.tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg); }
+.tabs { display: flex; border-bottom: 1px solid var(--line); flex-shrink: 0; background: var(--paper); }
 .tab {
-  padding: 11px 18px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--muted);
-  border-bottom: 2px solid transparent;
-  transition: all .15s;
-  user-select: none;
+  padding: 11px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--muted); border-bottom: 2px solid transparent; transition: all .15s; user-select: none;
+  display: flex; align-items: center; gap: 6px;
 }
-.tab:hover { color: var(--text); }
+.tab:hover { color: var(--ink); }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; background: var(--card); }
+.tab .badge {
+  background: var(--primary); color: white; font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 10px; font-variant-numeric: tabular-nums;
+}
 
 .tab-body { display: none; flex: 1; flex-direction: column; overflow: hidden; }
 .tab-body.active { display: flex; }
 .tab-scroll { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 
-/* ── company panel ── */
+/* ── watchlist panel ── */
 .add-row { display: flex; gap: 8px; }
 input[type=text] {
-  flex: 1;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  outline: none;
-  background: var(--card);
+  flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 13px; outline: none; background: var(--card); color: var(--ink);
   transition: border-color .15s, box-shadow .15s;
 }
 input[type=text]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.field-hint { font-size: 11.5px; color: var(--muted-soft); padding: 0 2px; }
+.add-status { font-size: 12px; padding: 0 2px; min-height: 16px; }
+.add-status.ok  { color: var(--good); }
+.add-status.err { color: var(--bad); }
+
+.combo { position: relative; flex: 1; }
+.combo-dropdown {
+  display: none;
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md); max-height: 260px; overflow-y: auto;
+}
+.combo-dropdown.open { display: block; }
+.combo-item {
+  padding: 9px 12px; cursor: pointer; font-size: 13px; display: flex;
+  align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.combo-item:hover, .combo-item.active { background: var(--primary-soft); }
+.combo-item .kr { font-weight: 600; color: var(--ink); }
+.combo-item .en { font-size: 11.5px; color: var(--muted); }
+.combo-item .ticker {
+  font-size: 10.5px; color: var(--muted-soft); font-variant-numeric: tabular-nums;
+  flex-shrink: 0; background: var(--paper); padding: 1px 6px; border-radius: 4px;
+}
+.combo-empty { padding: 10px 12px; font-size: 12.5px; color: var(--muted-soft); }
 
 .co-list { display: flex; flex-direction: column; gap: 6px; }
 .co-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 9px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px; background: var(--paper); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
   transition: border-color .15s, background .15s;
 }
 .co-item:hover { border-color: var(--primary-line); background: var(--primary-soft); }
 .co-del {
-  background: var(--card);
-  color: var(--muted);
-  padding: 3px 9px;
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--card); color: var(--muted); padding: 4px 10px; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--line); border-radius: 6px; cursor: pointer; flex-shrink: 0;
+  transition: background .15s, border-color .15s, color .15s;
 }
-.co-del:hover { color: var(--danger) !important; border-color: var(--danger) !important; background: #fef2f2 !important; filter: none; }
+.co-del:hover { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+.co-confirm {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--bad); flex-shrink: 0;
+}
+.co-confirm button {
+  border: none; border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.co-confirm .yes { background: var(--bad); color: white; }
+.co-confirm .no  { background: var(--card); color: var(--muted); border: 1px solid var(--line); }
 
 /* ── disclosure list ── */
-.disc-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg); }
-.disc-count { font-size: 12px; color: var(--muted); font-weight: 500; }
+.disc-toolbar {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--paper);
+}
+button.action {
+  padding: 8px 16px; border: none; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 12.5px; font-weight: 700; transition: filter .15s, transform .1s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+button.action:hover:not(:disabled) { filter: brightness(.95); }
+button.action:active:not(:disabled) { transform: scale(.97); }
+button.action:disabled { opacity: .5; cursor: default; }
+.btn-blue { background: var(--primary); color: white; }
+
+.disc-count { font-size: 12px; color: var(--muted); font-weight: 600; }
+.disc-updated { font-size: 11px; color: var(--muted-soft); margin-left: auto; }
 
 .disc-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 .disc-item {
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: all .12s;
-  line-height: 1.5;
+  padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12.5px; cursor: pointer;
+  border: 1px solid transparent; transition: all .12s; line-height: 1.5;
 }
-.disc-item:hover  { background: var(--bg); border-color: var(--border); }
-.disc-item.sel    { background: var(--primary-soft); border-color: var(--primary-line); }
+.disc-item:hover { background: var(--paper); border-color: var(--line); }
+.disc-item.sel   { background: var(--primary-soft); border-color: var(--primary-line); }
 .disc-corp { font-weight: 700; color: var(--primary); }
-.disc-date { color: var(--muted-soft); font-size: 11px; margin-top: 3px; }
+.disc-date { color: var(--muted-soft); font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 
-/* ── gpt panel ── */
+/* ── ai panel ── */
 .panel-right-header {
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 700;
-  flex-shrink: 0;
-  background: var(--bg);
-  color: var(--text);
+  padding: 12px 18px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 700;
+  flex-shrink: 0; background: var(--paper); color: var(--ink);
+  display: flex; align-items: center; justify-content: space-between;
 }
-.gpt-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  font-size: 14px;
-  line-height: 1.8;
-}
+.panel-right-header .lang-note { font-size: 10.5px; font-weight: 600; color: var(--muted-soft); text-transform: uppercase; letter-spacing: .04em; }
+.gpt-body { flex: 1; overflow-y: auto; padding: 24px; font-size: 14px; line-height: 1.8; }
 .gpt-placeholder { color: var(--muted-soft); text-align: center; padding-top: 80px; font-size: 13.5px; }
-.gpt-corp  { font-size: 16px; font-weight: 700; margin-bottom: 4px; letter-spacing: -.2px; }
-.gpt-date  { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+.gpt-corp { font-size: 16px; font-weight: 700; margin-bottom: 4px; letter-spacing: -.2px; }
+.gpt-date { font-size: 12px; color: var(--muted); margin-bottom: 14px; font-variant-numeric: tabular-nums; }
 .price-bar {
-  background: var(--primary-soft);
-  border-left: 3px solid var(--primary);
-  padding: 9px 13px;
-  border-radius: 0 8px 8px 0;
-  color: var(--primary-dark);
-  font-weight: 500;
-  font-size: 13px;
-  margin-bottom: 16px;
+  background: var(--primary-soft); border-left: 3px solid var(--primary); padding: 9px 13px;
+  border-radius: 0 8px 8px 0; color: var(--primary-dark); font-weight: 600; font-size: 13px;
+  margin-bottom: 16px; font-variant-numeric: tabular-nums;
 }
-.gpt-divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.gpt-divider { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
 .gpt-text { white-space: pre-wrap; font-size: 13.5px; line-height: 1.9; }
+.action-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .dart-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 16px;
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 500;
-  text-decoration: none;
-  padding: 6px 12px;
-  border: 1px solid var(--primary-line);
-  border-radius: var(--radius-sm);
-  background: var(--primary-soft);
-  transition: background .15s;
+  display: inline-flex; align-items: center; gap: 5px; color: var(--primary); font-size: 12px; font-weight: 600;
+  text-decoration: none; padding: 7px 13px; border: 1px solid var(--primary-line); border-radius: var(--radius-sm);
+  background: var(--primary-soft); transition: background .15s;
 }
-.dart-link:hover { background: #dfe9ff; }
-.btn-tg {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 16px;
-  margin-left: 8px;
-  background: #229ED9;
-  color: white;
-}
+.dart-link:hover { filter: brightness(.97); }
 .loading-msg { color: var(--muted); display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
-.spin {
-  width: 16px; height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin .8s linear infinite;
-}
+.spin { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── log bar ── */
-.log-bar {
-  background: #1c1e26;
-  color: #8fb0f5;
-  padding: 7px 20px;
-  font-size: 11.5px;
-  font-family: 'Consolas', monospace;
-  height: 52px;
-  overflow-y: auto;
-  flex-shrink: 0;
+.error-box {
+  background: var(--bad-soft); border: 1px solid var(--bad); border-radius: var(--radius-sm);
+  padding: 14px 16px; font-size: 13px; color: var(--bad); display: flex; gap: 10px; align-items: flex-start;
 }
-.log-bar span { display: block; line-height: 1.6; opacity: .9; }
+.error-box .title { font-weight: 700; margin-bottom: 3px; color: var(--ink); }
 
 .empty { color: var(--muted-soft); font-size: 13px; padding: 16px 4px; text-align: center; }
 
-/* ── mobile responsive ── */
 @media (max-width: 768px) {
-  body {
-    height: auto;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  header {
-    padding: 12px 14px;
-    gap: 10px;
-  }
-
-  header h1 {
-    font-size: 15px;
-  }
-
-  .status-badge {
-    font-size: 12px;
-    padding: 4px 9px;
-    white-space: nowrap;
-  }
-
-  .ctrl {
-    padding: 10px 12px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .ctrl button {
-    flex: 1 1 calc(50% - 4px);
-    min-height: 42px;
-    font-size: 14px;
-  }
-
-  .interval-row {
-    width: 100%;
-    margin-left: 0;
-    justify-content: space-between;
-    font-size: 13px;
-  }
-
-  input[type=range] {
-    flex: 1;
-    width: auto;
-  }
-
-  .main {
-    display: block;
-    padding: 10px;
-    overflow: visible;
-  }
-
-  .panel {
-    width: 100%;
-    margin-bottom: 10px;
-  }
-
-  .panel-left {
-    flex: none;
-  }
-
-  .panel-right {
-    min-height: 260px;
-  }
-
-  .tabs {
-    position: sticky;
-    top: 0;
-    background: var(--card);
-    z-index: 2;
-  }
-
-  .tab {
-    flex: 1;
-    text-align: center;
-    padding: 12px 8px;
-    font-size: 14px;
-  }
-
-  .tab-scroll {
-    max-height: 260px;
-    overflow-y: auto;
-    padding: 12px;
-  }
-
-  .add-row {
-    flex-direction: column;
-  }
-
-  input[type=text] {
-    width: 100%;
-    min-height: 44px;
-    font-size: 16px;
-  }
-
-  .add-row button {
-    width: 100%;
-    min-height: 44px;
-    font-size: 15px;
-  }
-
-  .co-item {
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
-  .co-del {
-    min-height: 34px;
-    font-size: 12px;
-  }
-
-  .disc-toolbar {
-    padding: 10px 12px;
-    flex-wrap: wrap;
-  }
-
-  .disc-toolbar button {
-    width: 100%;
-    min-height: 42px;
-    font-size: 14px !important;
-  }
-
-  .disc-count {
-    width: 100%;
-    font-size: 12px;
-  }
-
-  .disc-list {
-    max-height: 360px;
-    overflow-y: auto;
-    padding: 8px;
-    gap: 8px;
-  }
-
-  .disc-item {
-    padding: 12px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: #fff;
-    line-height: 1.45;
-  }
-
-  .disc-corp {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 14px;
-  }
-
-  .disc-date {
-    font-size: 12px;
-    margin-top: 6px;
-  }
-
-  .panel-right-header {
-    padding: 12px 14px;
-    font-size: 14px;
-  }
-
-  .gpt-body {
-    padding: 14px;
-    font-size: 14px;
-    line-height: 1.65;
-    min-height: 240px;
-  }
-
-  .gpt-placeholder {
-    padding-top: 40px;
-    font-size: 13px;
-  }
-
-  .gpt-corp {
-    font-size: 15px;
-    line-height: 1.4;
-  }
-
-  .price-bar {
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .gpt-text {
-    font-size: 14px;
-    line-height: 1.7;
-    word-break: keep-all;
-  }
-
-  .dart-link,
-  .btn-tg {
-    width: 100%;
-    min-height: 42px;
-    justify-content: center;
-    margin-left: 0;
-    margin-top: 10px;
-    font-size: 13px;
-  }
-
-  .log-bar {
-    height: 48px;
-    padding: 6px 10px;
-    font-size: 10.5px;
-  }
+  .main { flex-direction: column; overflow: visible; }
+  body { height: auto; }
+  .panel-left { flex: none; }
+  .panel-right { min-height: 320px; }
+  .tip { margin: 12px 12px 0; }
+  .main { padding: 10px; }
 }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>📊 DART 공시 대시보드</h1>
-  <div class="status-badge">
-    <div class="dot" id="dot"></div>
-    <span id="statusTxt">대기 중</span>
+  <div class="brand">
+    <h1>📊 DART Disclosure Search</h1>
+    <div class="sub">Korea corporate filings, summarized in English</div>
   </div>
 </header>
 
-<div class="ctrl">
-  <button class="btn-go"   id="startBtn" onclick="startMonitor()">▶ 시작</button>
-  <button class="btn-stop" id="stopBtn"  onclick="stopMonitor()" disabled>■ 중지</button>
-  <div class="interval-row">
-    <span>체크 주기</span>
-    <input type="range" id="slider" min="5" max="120" step="5" value="60"
-           oninput="document.getElementById('iVal').textContent=this.value">
-    <span><b id="iVal">60</b>분</span>
+<div class="tip" id="tip">
+  <div style="font-size:16px;line-height:1.3">👋</div>
+  <div style="flex:1">
+    <div style="font-weight:700">How it works</div>
+    <div class="steps">
+      <div class="step" id="step1"><b>1</b> Add companies to your watchlist</div>
+      <div class="step" id="step2"><b>2</b> Click a filing to read the AI summary</div>
+    </div>
   </div>
+  <button class="tip-close" onclick="document.getElementById('tip').classList.add('hidden')">✕</button>
 </div>
 
 <div class="main">
@@ -512,48 +272,54 @@ input[type=text]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var
   <!-- LEFT -->
   <div class="panel panel-left">
     <div class="tabs">
-      <div class="tab active" onclick="showTab('companies',this)">관심기업</div>
-      <div class="tab"        onclick="showTab('disclosures',this)">공시목록</div>
+      <div class="tab active" onclick="showTab('companies',this)">Watchlist</div>
+      <div class="tab" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
     </div>
 
-    <!-- 관심기업 탭 -->
+    <!-- Watchlist tab -->
     <div class="tab-body active" id="tab-companies">
       <div class="tab-scroll">
         <div class="add-row">
-          <input type="text" id="coInput" placeholder="기업명 입력 (예: 삼성전자)"
-                 onkeydown="if(event.key==='Enter')addCompany()">
-          <button class="btn-blue" onclick="addCompany()">추가</button>
+          <div class="combo">
+            <input type="text" id="coInput" autocomplete="off" placeholder="Type a company name or ticker (e.g. Samsung, 005930)"
+                   oninput="onSearchInput()"
+                   onkeydown="onSearchKeydown(event)">
+            <div class="combo-dropdown" id="coDropdown"></div>
+          </div>
+          <button class="action btn-blue" id="addBtn" onclick="addCompany()">Add</button>
         </div>
+        <div class="field-hint">Korean name, English name, or 6-digit ticker all work</div>
+        <div class="add-status" id="addStatus"></div>
         <div class="co-list" id="coList">
-          <p class="empty">등록된 기업이 없습니다.</p>
+          <p class="empty">No companies yet. Add one above to get started.</p>
         </div>
       </div>
     </div>
 
-    <!-- 공시목록 탭 -->
+    <!-- Filings tab -->
     <div class="tab-body" id="tab-disclosures">
       <div class="disc-toolbar">
-        <button class="btn-grey" onclick="loadDiscs()" style="font-size:12px;padding:5px 12px">🔄 새로고침</button>
+        <button class="action btn-blue" onclick="loadDiscs()" id="searchBtn">🔍 Search filings</button>
         <span class="disc-count" id="discCount"></span>
+        <span class="disc-updated" id="discUpdated"></span>
       </div>
       <div class="disc-list" id="discList">
-        <p class="empty" style="padding:12px">공시 새로고침을 눌러주세요.</p>
+        <p class="empty" style="padding:12px">Add a company, then click "Search filings".</p>
       </div>
     </div>
   </div>
 
   <!-- RIGHT -->
   <div class="panel panel-right">
-    <div class="panel-right-header">GPT 해석</div>
+    <div class="panel-right-header">
+      <span>AI Summary</span>
+      <span class="lang-note">EN</span>
+    </div>
     <div class="gpt-body" id="gptBody">
-      <p class="gpt-placeholder">👈 공시를 클릭하면 GPT 해석이 표시됩니다</p>
+      <p class="gpt-placeholder">👈 Select a filing on the left to see its AI summary here</p>
     </div>
   </div>
 
-</div>
-
-<div class="log-bar" id="logBar">
-  <span style="color:#555">실행 로그가 여기에 표시됩니다</span>
 </div>
 
 <script>
@@ -573,55 +339,202 @@ async function loadCompanies() {
 
 function render_companies(list) {
   const el = document.getElementById('coList');
-  if (!list.length) { el.innerHTML = '<p class="empty">등록된 기업이 없습니다.</p>'; return; }
-  el.innerHTML = list.map(n =>
-    `<div class="co-item">
+  if (!list.length) { el.innerHTML = '<p class="empty">No companies yet. Add one above to get started.</p>'; return; }
+  el.innerHTML = list.map((n, i) =>
+    `<div class="co-item" id="co-${i}">
        <span>${n}</span>
-       <button class="btn-grey co-del" onclick="delCompany('${encodeURIComponent(n)}')">✕ 삭제</button>
+       <button class="co-del" onclick="askDelete(${i}, this)">✕ Remove</button>
      </div>`
   ).join('');
+  window._companies = list;
 }
+
+function askDelete(i, btn) {
+  const item = btn.closest('.co-item');
+  const name = window._companies[i];
+  item.innerHTML = `<span>${name}</span>
+    <span class="co-confirm">Remove this company?
+      <button class="yes" onclick="confirmDelete('${encodeURIComponent(name)}')">Remove</button>
+      <button class="no" onclick="render_companies(window._companies)">Cancel</button>
+    </span>`;
+}
+
+async function confirmDelete(enc) {
+  const r = await fetch('/api/companies/' + enc, {method:'DELETE'});
+  render_companies(await r.json());
+}
+
+// ── search-as-you-type dropdown ────────────────────────
+let _searchResults = [];
+let _searchActiveIdx = -1;
+let _searchDebounce = null;
+
+function onSearchInput() {
+  clearTimeout(_searchDebounce);
+  const q = document.getElementById('coInput').value.trim();
+  if (q.length < 2) { closeDropdown(); return; }
+  _searchDebounce = setTimeout(() => runSearch(q), 200);
+}
+
+async function runSearch(q) {
+  try {
+    const r = await fetch('/api/companies/search?q=' + encodeURIComponent(q));
+    _searchResults = await r.json();
+    renderDropdown();
+  } catch (e) { /* ignore transient errors while typing */ }
+}
+
+function renderDropdown() {
+  const dd = document.getElementById('coDropdown');
+  _searchActiveIdx = -1;
+  if (!_searchResults.length) {
+    dd.innerHTML = '<div class="combo-empty">No listed company matches. You can still press Enter to try an exact/unlisted name.</div>';
+    dd.classList.add('open');
+    return;
+  }
+  dd.innerHTML = _searchResults.map((c, i) =>
+    `<div class="combo-item" id="ci${i}" onmousedown="selectSearchResult(${i})">
+       <span><span class="kr">${c.name_kr}</span>${c.name_en ? ` <span class="en">${c.name_en}</span>` : ''}</span>
+       <span class="ticker">${c.ticker}</span>
+     </div>`
+  ).join('');
+  dd.classList.add('open');
+}
+
+function closeDropdown() {
+  document.getElementById('coDropdown').classList.remove('open');
+  _searchResults = [];
+  _searchActiveIdx = -1;
+}
+
+function selectSearchResult(i) {
+  const c = _searchResults[i];
+  document.getElementById('coInput').value = c.name_kr;
+  closeDropdown();
+  addCompany();
+}
+
+function onSearchKeydown(event) {
+  const dd = document.getElementById('coDropdown');
+  const open = dd.classList.contains('open') && _searchResults.length;
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (open && _searchActiveIdx >= 0) {
+      selectSearchResult(_searchActiveIdx);
+    } else {
+      closeDropdown();
+      addCompany();
+    }
+    return;
+  }
+  if (event.key === 'Escape') { closeDropdown(); return; }
+  if (!open) return;
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    _searchActiveIdx = Math.min(_searchActiveIdx + 1, _searchResults.length - 1);
+    highlightActive();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    _searchActiveIdx = Math.max(_searchActiveIdx - 1, 0);
+    highlightActive();
+  }
+}
+
+function highlightActive() {
+  document.querySelectorAll('.combo-item').forEach((el, i) =>
+    el.classList.toggle('active', i === _searchActiveIdx));
+  const active = document.getElementById('ci' + _searchActiveIdx);
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.combo')) closeDropdown();
+});
 
 async function addCompany() {
   const inp = document.getElementById('coInput');
+  const btn = document.getElementById('addBtn');
+  const status = document.getElementById('addStatus');
   const name = inp.value.trim();
   if (!name) return;
-  const r = await fetch('/api/companies', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({name})
-  });
-  render_companies(await r.json());
-  inp.value = '';
-}
+  closeDropdown();
 
-async function delCompany(enc) {
-  const r = await fetch('/api/companies/' + enc, {method:'DELETE'});
-  render_companies(await r.json());
+  btn.disabled = true;
+  status.className = 'add-status';
+  status.textContent = 'Looking up "' + name + '"...';
+
+  try {
+    const r = await fetch('/api/companies', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({name})
+    });
+    const res = await r.json();
+
+    if (!r.ok || res.error) {
+      status.className = 'add-status err';
+      status.textContent = res.error || 'Could not add that company.';
+      return;
+    }
+
+    render_companies(res.companies);
+    status.className = 'add-status ok';
+    status.textContent = res.resolved === name ? `Added ${res.resolved}` : `Matched "${name}" → ${res.resolved}`;
+    inp.value = '';
+    document.getElementById('step1').classList.add('done');
+  } catch (e) {
+    status.className = 'add-status err';
+    status.textContent = 'Network error. Please try again.';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── disclosures ───────────────────────────────────────
 let _discs = [];
 
 async function loadDiscs() {
-  document.getElementById('discCount').textContent = '⏳ 불러오는 중...';
-  document.getElementById('discList').innerHTML = '';
+  const btn = document.getElementById('searchBtn');
+  if (!window._companies || !window._companies.length) {
+    document.getElementById('discCount').textContent = 'Add a company to your watchlist first';
+    showTab('disclosures', document.querySelectorAll('.tab')[1]);
+    return;
+  }
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Searching...';
+  document.getElementById('discCount').textContent = '';
   try {
     const r = await fetch('/api/disclosures');
     const data = await r.json();
-    if (data.error) { document.getElementById('discCount').textContent = '❌ ' + data.error; return; }
+    if (data.error) {
+      document.getElementById('discList').innerHTML =
+        `<div class="error-box"><div><div class="title">Search failed</div>${data.error}</div></div>`;
+      document.getElementById('discCount').textContent = '';
+      return;
+    }
     _discs = data;
     render_discs(data);
-    document.getElementById('discCount').textContent = `총 ${data.length}건 (최근 90일)`;
-    if (data.length) showTab('disclosures', document.querySelectorAll('.tab')[1]);
+    document.getElementById('discCount').textContent = `${data.length} result${data.length===1?'':'s'} (last 90 days)`;
+    document.getElementById('discUpdated').textContent = 'Updated just now';
+    const badge = document.getElementById('discBadge');
+    badge.textContent = data.length;
+    badge.style.display = data.length ? 'inline-block' : 'none';
+    showTab('disclosures', document.querySelectorAll('.tab')[1]);
   } catch(e) {
-    document.getElementById('discCount').textContent = '❌ 네트워크 오류';
+    document.getElementById('discList').innerHTML =
+      `<div class="error-box"><div><div class="title">Network error</div>Could not reach the server. Please try again.</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
   }
 }
 
 function render_discs(list) {
   const el = document.getElementById('discList');
-  if (!list.length) { el.innerHTML = '<p class="empty" style="padding:12px">최근 90일 공시 없음</p>'; return; }
+  if (!list.length) { el.innerHTML = '<p class="empty" style="padding:12px">No filings in the last 90 days</p>'; return; }
   el.innerHTML = list.map((d, i) =>
     `<div class="disc-item" id="di${i}" onclick="onDiscClick(${i},this)">
        <div><span class="disc-corp">[${d.corp_name}]</span> ${d.report_nm}</div>
@@ -636,7 +549,7 @@ async function onDiscClick(idx, el) {
   const d = _discs[idx];
 
   document.getElementById('gptBody').innerHTML =
-    `<div class="loading-msg"><div class="spin"></div> GPT 해석 중... <span style="color:#aaa;font-size:12px">[${d.corp_name}] ${d.report_nm}</span></div>`;
+    `<div class="loading-msg"><div class="spin"></div> Summarizing with GPT... <span style="color:var(--muted-soft);font-size:12px">[${d.corp_name}] ${d.report_nm}</span></div>`;
 
   try {
     const r = await fetch('/api/interpret', {
@@ -645,92 +558,32 @@ async function onDiscClick(idx, el) {
       body: JSON.stringify({rcept_no:d.rcept_no, corp_name:d.corp_name, report_nm:d.report_nm, stock_code:d.stock_code})
     });
     const res = await r.json();
-    if (res.error) { document.getElementById('gptBody').innerHTML = `<p style="color:red">❌ ${res.error}</p>`; return; }
+    if (res.error) {
+      document.getElementById('gptBody').innerHTML =
+        `<div class="error-box"><div><div class="title">Couldn't generate a summary</div>${res.error}</div></div>`;
+      return;
+    }
 
     const pi = res.price_info;
     const priceHtml = pi
-      ? `<div class="price-bar">📈 주가: <b>${pi.price_str}</b> &nbsp;|&nbsp; 거래량: ${pi.volume_str}</div>`
+      ? `<div class="price-bar">📈 Stock price: <b>${pi.price_str}</b> &nbsp;|&nbsp; Volume: ${pi.volume_str}</div>`
       : '';
     const dartUrl = `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${d.rcept_no}`;
 
-    window._lastInterpret = {d, summary: res.summary, price_info: pi};
-
     document.getElementById('gptBody').innerHTML =
       `<div class="gpt-corp">[${d.corp_name}] ${d.report_nm}</div>
-       <div class="gpt-date">접수일: ${d.rcept_dt}</div>
+       <div class="gpt-date">Filed: ${d.rcept_dt}</div>
        ${priceHtml}
        <hr class="gpt-divider">
        <div class="gpt-text">${res.summary}</div>
-       <a class="dart-link" href="${dartUrl}" target="_blank">📄 DART 원문 보기</a>
-       <button class="btn-tg" onclick="sendTelegram(this)">📨 텔레그램으로 보내기</button>`;
+       <div class="action-row">
+         <a class="dart-link" href="${dartUrl}" target="_blank">📄 View original filing on DART</a>
+       </div>`;
   } catch(e) {
-    document.getElementById('gptBody').innerHTML = `<p style="color:red">❌ 오류 발생</p>`;
+    document.getElementById('gptBody').innerHTML =
+      `<div class="error-box"><div><div class="title">Something went wrong</div>Please try selecting the filing again.</div></div>`;
   }
 }
-
-async function sendTelegram(btn) {
-  const li = window._lastInterpret;
-  if (!li) return;
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '전송 중...';
-  try {
-    const r = await fetch('/api/send_telegram', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        corp_name: li.d.corp_name, report_nm: li.d.report_nm,
-        rcept_dt: li.d.rcept_dt, rcept_no: li.d.rcept_no,
-        summary: li.summary, price_info: li.price_info
-      })
-    });
-    const res = await r.json();
-    btn.textContent = res.sent ? '✅ 전송 완료' : '❌ 전송 실패';
-  } catch(e) {
-    btn.textContent = '❌ 전송 실패';
-  } finally {
-    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2500);
-  }
-}
-
-// ── monitor control ───────────────────────────────────
-async function startMonitor() {
-  const interval = parseInt(document.getElementById('slider').value);
-  const r = await fetch('/api/monitor/start', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({interval})
-  });
-  const d = await r.json();
-  setUI(d.running);
-  if (d.running) loadDiscs();
-}
-
-async function stopMonitor() {
-  await fetch('/api/monitor/stop', {method:'POST'});
-  setUI(false);
-}
-
-function setUI(running) {
-  document.getElementById('startBtn').disabled = running;
-  document.getElementById('stopBtn').disabled  = !running;
-  document.getElementById('dot').className     = 'dot' + (running ? ' running' : '');
-  document.getElementById('statusTxt').textContent = running ? '실행 중' : '대기 중';
-}
-
-// ── status poll (2s) ──────────────────────────────────
-setInterval(async () => {
-  try {
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    setUI(d.running);
-    if (d.logs && d.logs.length) {
-      const lb = document.getElementById('logBar');
-      lb.innerHTML = d.logs.map(l => `<span>${l}</span>`).join('');
-      lb.scrollTop = lb.scrollHeight;
-    }
-  } catch {}
-}, 2000);
 
 // ── init ──────────────────────────────────────────────
 loadCompanies();

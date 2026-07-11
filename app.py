@@ -1,10 +1,9 @@
-import os, json, time, re, zipfile, io, threading
-import csv
+import os, json, time, re, zipfile, io
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, request, render_template
 import requests as http
 import yfinance as yf
 from openai import OpenAI
@@ -15,26 +14,31 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 DART_API_KEY       = os.getenv('DART_API_KEY')
 OPENAI_API_KEY     = os.getenv('OPENAI_API_KEY')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN")
 
-SEEN_FILE        = os.path.join(BASE_DIR, 'seen_disclosures.json')
-CORP_CACHE_FILE  = os.path.join(BASE_DIR, 'corp_map_cache.json')
-STOCK_CACHE_FILE = os.path.join(BASE_DIR, 'stock_code_cache.json')
+CORP_CACHE_FILE     = os.path.join(BASE_DIR, 'corp_map_cache.json')
+TICKER_CACHE_FILE   = os.path.join(BASE_DIR, 'ticker_corp_cache.json')
+STOCK_CACHE_FILE    = os.path.join(BASE_DIR, 'stock_code_cache.json')
+ENG_NAME_CACHE_FILE = os.path.join(BASE_DIR, 'eng_name_cache.json')
+COMPANIES_DATASET_FILE = os.path.join(BASE_DIR, 'static', 'companies.json')
 CACHE_MAX_DAYS   = 7
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ── global state ───────────────────────────────────────
 _companies    = []
-_seen         = set()
-_monitor_on   = False
-_stop_event   = threading.Event()
-_logs         = []
-_logs_lock    = threading.Lock()
-_interval_min = 60
+
+# ── searchable listed-companies dataset (prebuilt, shipped in the repo) ──
+def load_companies_dataset():
+    if not os.path.exists(COMPANIES_DATASET_FILE):
+        return []
+    with open(COMPANIES_DATASET_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+_companies_dataset = load_companies_dataset()
+_dataset_by_kr     = {c['name_kr']: c for c in _companies_dataset}
+_dataset_by_ticker = {c['ticker']: c for c in _companies_dataset}
 
 # ── helpers ────────────────────────────────────────────
 def get_db():
@@ -51,23 +55,6 @@ def get_user_key():
         or request.remote_addr
         or "unknown"
     )
-
-def _log(msg):
-    ts = datetime.now().strftime('%H:%M:%S')
-    with _logs_lock:
-        _logs.append(f'[{ts}] {msg}')
-        if len(_logs) > 50:
-            _logs.pop(0)
-
-def load_seen():
-    global _seen
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE) as f:
-            _seen = set(json.load(f))
-
-def save_seen():
-    with open(SEEN_FILE, 'w') as f:
-        json.dump(list(_seen), f)
 
 def init_db():
     sql = """
@@ -106,15 +93,6 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS telegram_send_logs (
-        id BIGSERIAL PRIMARY KEY,
-        user_key VARCHAR(100),
-        rcept_no VARCHAR(30),
-        corp_name VARCHAR(100),
-        report_nm VARCHAR(300),
-        sent BOOLEAN,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
     """
 
     with get_db() as conn:
@@ -194,74 +172,160 @@ def save_interpretation(data, summary, price_info):
             ))
 
 
-def save_telegram_log(data, sent):
-    sql = """
-        INSERT INTO telegram_send_logs
-        (user_key, rcept_no, corp_name, report_nm, sent)
-        VALUES (%s, %s, %s, %s, %s)
-    """
-
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (
-                get_user_key(),
-                data.get("rcept_no"),
-                data.get("corp_name"),
-                data.get("report_nm"),
-                sent
-            ))
-
-
 def download_corp_codes():
     resp = http.get('https://opendart.fss.or.kr/api/corpCode.xml',
                     params={'crtfc_key': DART_API_KEY}, timeout=30)
     with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
         with z.open('CORPCODE.xml') as f:
             tree = ET.parse(f)
-    m = {}
+    name_map, ticker_map = {}, {}
     for item in tree.getroot().findall('list'):
-        name, code = item.findtext('corp_name'), item.findtext('corp_code')
+        name  = item.findtext('corp_name')
+        code  = item.findtext('corp_code')
+        stock = (item.findtext('stock_code') or '').strip()
         if name and code:
-            m[name] = code
-    return m
+            name_map[name] = code
+        if name and stock:
+            ticker_map[stock] = name
+    return name_map, ticker_map
 
 def load_corp_codes():
-    if os.path.exists(CORP_CACHE_FILE):
-        if (time.time() - os.path.getmtime(CORP_CACHE_FILE)) / 86400 < CACHE_MAX_DAYS:
-            with open(CORP_CACHE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    m = download_corp_codes()
+    """Returns (name_map, ticker_map): DART official Korean name -> corp_code,
+    and stock ticker -> DART official Korean name (listed companies only)."""
+    cache_fresh = (
+        os.path.exists(CORP_CACHE_FILE) and os.path.exists(TICKER_CACHE_FILE)
+        and (time.time() - os.path.getmtime(CORP_CACHE_FILE)) / 86400 < CACHE_MAX_DAYS
+    )
+    if cache_fresh:
+        with open(CORP_CACHE_FILE, 'r', encoding='utf-8') as f:
+            name_map = json.load(f)
+        with open(TICKER_CACHE_FILE, 'r', encoding='utf-8') as f:
+            ticker_map = json.load(f)
+        return name_map, ticker_map
+    name_map, ticker_map = download_corp_codes()
     with open(CORP_CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(m, f, ensure_ascii=False)
-    return m
+        json.dump(name_map, f, ensure_ascii=False)
+    with open(TICKER_CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ticker_map, f, ensure_ascii=False)
+    return name_map, ticker_map
 
-def get_stock_code(corp_code):
+def resolve_via_yahoo(query):
+    """Look up an English company name on Yahoo Finance and return a Korean-exchange
+    ticker (e.g. '005930') if one of the top matches is listed on KOSPI/KOSDAQ."""
+    try:
+        r = http.get(
+            'https://query2.finance.yahoo.com/v1/finance/search',
+            params={'q': query, 'quotesCount': 8, 'newsCount': 0},
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=8,
+        )
+        for q in r.json().get('quotes', []):
+            symbol = q.get('symbol', '')
+            if symbol.endswith('.KS') or symbol.endswith('.KQ'):
+                return symbol.split('.')[0]
+    except Exception:
+        pass
+    return None
+
+def resolve_from_dataset(raw_name):
+    """Fast, complete lookup against the prebuilt listed-companies dataset
+    (Korean name, DART official English name, or ticker). Covers every
+    company a user could pick from the search dropdown."""
+    key = raw_name.strip()
+    if key in _dataset_by_kr:
+        return key
+    if key in _dataset_by_ticker:
+        return _dataset_by_ticker[key]['name_kr']
+    key_up = key.upper()
+    for c in _companies_dataset:
+        if c['name_en'] and c['name_en'].upper() == key_up:
+            return c['name_kr']
+    return None
+
+def resolve_company_name(raw_name, name_map, ticker_map, eng_name_map):
+    """Accepts a DART Korean name, a 6-digit ticker, or an English company name,
+    and returns the matching DART Korean name, or None if nothing matches.
+    Preference order: prebuilt listed-companies dataset (fast, has real
+    English names) -> full DART name list -> ticker -> cached English name
+    from a past Yahoo lookup -> live Yahoo Finance search (cold-start
+    fallback for a company not in the dataset, e.g. unlisted or newly listed)."""
+    from_dataset = resolve_from_dataset(raw_name)
+    if from_dataset:
+        return from_dataset
+
+    name_map_ci = {k.upper(): k for k in name_map}
+
+    matched = name_map_ci.get(raw_name.upper())
+    if matched:
+        return matched
+
+    ticker = raw_name.strip()
+    if ticker.isdigit() and ticker in ticker_map:
+        return ticker_map[ticker]
+
+    cached = eng_name_map.get(raw_name.upper())
+    if cached:
+        return cached
+
+    yahoo_ticker = resolve_via_yahoo(raw_name)
+    if yahoo_ticker and yahoo_ticker in ticker_map:
+        return ticker_map[yahoo_ticker]
+
+    return None
+
+def fetch_company_info(corp_code):
+    """One DART call gives us both the stock ticker and DART's own official
+    English company name (corp_name_eng) - more reliable than guessing via
+    a third-party search."""
     r = http.get('https://opendart.fss.or.kr/api/company.json',
                  params={'crtfc_key': DART_API_KEY, 'corp_code': corp_code}, timeout=10)
     d = r.json()
-    return d.get('stock_code', '').strip() or None if d.get('status') == '000' else None
+    if d.get('status') != '000':
+        return {'stock_code': None, 'eng_name': None}
+    return {
+        'stock_code': (d.get('stock_code') or '').strip() or None,
+        'eng_name':   (d.get('corp_name_eng') or '').strip() or None,
+    }
+
+def load_json_cache(path):
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_json_cache(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+
+def get_or_fetch_company_info(matched_name, corp_code, stock_cache, eng_name_map):
+    """Returns {'stock_code', 'eng_name'} for a DART-matched Korean company name,
+    using the on-disk cache when available. Fetches from DART and updates both
+    caches (in place) on a cache miss. Caller is responsible for persisting."""
+    info = stock_cache.get(matched_name)
+    if info is None:
+        info = fetch_company_info(corp_code)
+        stock_cache[matched_name] = info
+        if info.get('eng_name'):
+            eng_name_map[info['eng_name'].upper()] = matched_name
+    return info
 
 def build_interest_dict(corp_map, names):
-    stock_cache = {}
-    if os.path.exists(STOCK_CACHE_FILE):
-        with open(STOCK_CACHE_FILE, 'r', encoding='utf-8') as f:
-            stock_cache = json.load(f)
+    stock_cache   = load_json_cache(STOCK_CACHE_FILE)
+    eng_name_map  = load_json_cache(ENG_NAME_CACHE_FILE)
     corp_map_ci = {k.upper(): k for k in corp_map}
-    idict, sdict, updated = {}, {}, False
+    idict, sdict = {}, {}
+    before = json.dumps(stock_cache, sort_keys=True)
     for name in names:
         matched = corp_map_ci.get(name.upper())
         if not matched:
             continue
-        corp_code  = corp_map[matched]
-        stock_code = stock_cache.get(name) or get_stock_code(corp_code)
-        if name not in stock_cache:
-            stock_cache[name] = stock_code
-            updated = True
+        corp_code = corp_map[matched]
+        info = get_or_fetch_company_info(name, corp_code, stock_cache, eng_name_map)
         idict[name] = corp_code
-        sdict[name] = stock_code
-    if updated:
-        with open(STOCK_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(stock_cache, f, ensure_ascii=False)
+        sdict[name] = info.get('stock_code')
+    if json.dumps(stock_cache, sort_keys=True) != before:
+        save_json_cache(STOCK_CACHE_FILE, stock_cache)
+        save_json_cache(ENG_NAME_CACHE_FILE, eng_name_map)
     return idict, sdict
 
 def get_disclosures(corp_code, days=1):
@@ -288,8 +352,8 @@ def get_stock_price(stock_code):
             prev_close = hist['Close'].iloc[-2] if len(hist) >= 2 else price
             change     = (price - prev_close) / prev_close * 100 if prev_close else 0.0
             arrow      = '▲' if change > 0 else '▼' if change < 0 else '-'
-            return {'price_str': f'{price:,.0f}원 ({arrow}{abs(change):.2f}%)',
-                    'volume_str': f'{volume:,}주',
+            return {'price_str': f'{price:,.0f} KRW ({arrow}{abs(change):.2f}%)',
+                    'volume_str': f'{volume:,} shares',
                     'price': float(price), 'change': float(change), 'volume': volume}
         except Exception:
             continue
@@ -314,29 +378,30 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
     price_text = ''
     if price_info:
         price_text = (
-            f"\n[참고] 현재 주가: {price_info['price_str']}, 거래량: {price_info['volume_str']}"
-            f" (공시와 시차가 있으므로 주가는 참고용으로만 활용할 것)\n"
+            f"\n[Reference] Current stock price: {price_info['price_str']}, "
+            f"volume: {price_info['volume_str']} "
+            f"(there may be a delay between the filing and this price, so use it only as context)\n"
         )
 
     rule = (
-        "작성 규칙: "
-        "300자 이내. 존대 금지. 간략한 어투. "
-        "최대한 많은 정보를 압축해서 담아. "
-        "투자자 관점에서 핵심 의미, 긍정 요인, 부정 요인, 확인할 점을 포함해. "
-        "주가 등락은 직접 반영하지 말고 공시의 본질과 사업적 의미만 봐. "
-        "불확실한 내용은 추정이라고 표시해."
+        "Writing rules: "
+        "Respond in English. Keep it under 120 words. Be concise and information-dense. "
+        "Write from an investor's perspective: cover the core meaning, positive factors, "
+        "negative factors/risks, and what to verify next. "
+        "Judge the filing on its own business substance, not on short-term stock price moves. "
+        "Clearly flag anything uncertain as an inference."
     )
 
     if content:
         prompt = (
-            f"다음은 '{corp_name}'의 DART 공시 '{report_name}' 원문이야."
+            f"The following is the full text of a DART filing by '{corp_name}' titled '{report_name}'."
             f"{price_text}\n"
             f"{rule}\n\n"
             f"{content}"
         )
     else:
         prompt = (
-            f"DART 공시 제목: '{corp_name}' - '{report_name}'"
+            f"DART filing title: '{corp_name}' - '{report_name}'"
             f"{price_text}\n"
             f"{rule}"
         )
@@ -349,61 +414,6 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
     )
     return resp.choices[0].message.content
 
-def send_telegram(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False
-    try:
-        r = http.post(
-            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-            json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'},
-            timeout=10)
-        return r.ok
-    except Exception as e:
-        _log(f'텔레그램 전송 실패: {e}')
-        return False
-
-def build_telegram_message(corp_name, report_nm, rcept_dt, rcept_no, summary, price_info=None):
-    dart_url   = f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}'
-    price_line = (f'\n주가: {price_info["price_str"]}  |  거래량: {price_info["volume_str"]}'
-                  if price_info else '')
-    return (f'📢 <b>[{corp_name}] {report_nm}</b>\n'
-            f'접수일: {rcept_dt}{price_line}\n\n'
-            f'{summary}\n\n'
-            f'<a href="{dart_url}">📄 DART 원문 보기</a>')
-
-# ── monitor loop ───────────────────────────────────────
-def monitor_loop():
-    global _monitor_on
-    while not _stop_event.is_set():
-        try:
-            _log('공시 체크 중...')
-            corp_map = load_corp_codes()
-            idict, sdict = build_interest_dict(corp_map, _companies)
-            for corp_name, corp_code in idict.items():
-                new_ones = [d for d in get_disclosures(corp_code, days=1)
-                            if d['rcept_no'] not in _seen]
-                for d in new_ones:
-                    _seen.add(d['rcept_no'])
-                    _log(f'📄 [{corp_name}] {d["report_nm"]}')
-                    def _notify(cn=corp_name, disc=d):
-                        try:
-                            sc         = sdict.get(cn)
-                            price_info = get_stock_price(sc)
-                            content    = fetch_disclosure_text(disc['rcept_no'])
-                            summary    = interpret_with_gpt(cn, disc['report_nm'], content, price_info)
-                            msg = build_telegram_message(cn, disc['report_nm'], disc['rcept_dt'],
-                                                          disc['rcept_no'], summary, price_info)
-                            send_telegram(msg)
-                        except Exception as te:
-                            _log(f'텔레그램 전송 실패: {te}')
-                    threading.Thread(target=_notify, daemon=True).start()
-            save_seen()
-            _log(f'완료. {_interval_min}분 후 재실행.')
-        except Exception as e:
-            _log(f'❌ 오류: {e}')
-        _stop_event.wait(_interval_min * 60)
-    _monitor_on = False
-
 # ── Flask ──────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -415,17 +425,66 @@ def index():
 def api_get_companies():
     return jsonify(_companies)
 
+@app.route('/api/companies/search')
+def api_search_companies():
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify([])
+    q_up = q.upper()
+
+    scored = []
+    for c in _companies_dataset:
+        name_en_up = c['name_en'].upper() if c['name_en'] else ''
+        if c['ticker'] == q:
+            score = 0
+        elif c['name_kr'].startswith(q) or name_en_up.startswith(q_up):
+            score = 1
+        elif q in c['name_kr'] or q_up in name_en_up or c['ticker'].startswith(q):
+            score = 2
+        else:
+            continue
+        # Within a tier, shorter names tend to be the well-known/primary entity
+        # (e.g. "SAMSUNG ELECTRONICS CO,.LTD" before "SAMSUNG SPECIAL PURPOSE ACQUISITION...").
+        scored.append((score, len(c['name_kr']), c))
+
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return jsonify([c for _, _, c in scored[:10]])
+
 @app.route('/api/companies', methods=['POST'])
 def api_add_company():
-    name = (request.json or {}).get('name', '').strip()
+    raw_name = (request.json or {}).get('name', '').strip()
+    if not raw_name:
+        return jsonify({'error': 'Please enter a company name or ticker.'}), 400
 
-    if name:
-        save_search_log(name)
+    try:
+        save_search_log(raw_name)
+    except Exception as e:
+        print(f'save_search_log failed: {e}', flush=True)
 
-    if name and name not in _companies:
-        _companies.append(name)
+    name_map, ticker_map = load_corp_codes()
+    stock_cache  = load_json_cache(STOCK_CACHE_FILE)
+    eng_name_map = load_json_cache(ENG_NAME_CACHE_FILE)
 
-    return jsonify(_companies)
+    matched = resolve_company_name(raw_name, name_map, ticker_map, eng_name_map)
+    if not matched:
+        return jsonify({
+            'error': f'Could not find a DART-listed company matching "{raw_name}". '
+                     f'Try the official Korean name or the 6-digit ticker (e.g. 005930).'
+        }), 404
+
+    # Cache DART's stock code + official English name now, so future lookups
+    # (Korean, English, or ticker) for this company resolve instantly.
+    get_or_fetch_company_info(matched, name_map[matched], stock_cache, eng_name_map)
+    # Also remember the exact phrase the user typed, so re-typing it later
+    # (even if it's not DART's official English name) skips the Yahoo lookup.
+    eng_name_map[raw_name.upper()] = matched
+    save_json_cache(STOCK_CACHE_FILE, stock_cache)
+    save_json_cache(ENG_NAME_CACHE_FILE, eng_name_map)
+
+    if matched not in _companies:
+        _companies.append(matched)
+
+    return jsonify({'companies': _companies, 'resolved': matched})
 
 @app.route('/api/companies/<path:name>', methods=['DELETE'])
 def api_del_company(name):
@@ -438,8 +497,8 @@ def api_disclosures():
     if not _companies:
         return jsonify([])
     try:
-        corp_map = load_corp_codes()
-        idict, sdict = build_interest_dict(corp_map, _companies)
+        name_map, _ticker_map = load_corp_codes()
+        idict, sdict = build_interest_dict(name_map, _companies)
         items = []
         for corp_name, corp_code in idict.items():
             stock_code = sdict.get(corp_name)
@@ -469,53 +528,21 @@ def api_interpret():
             price_info
         )
 
-        save_interpretation(data, summary, price_info)
+        try:
+            save_interpretation(data, summary, price_info)
+        except Exception as e:
+            print(f'save_interpretation failed: {e}', flush=True)
 
         return jsonify({'summary': summary, 'price_info': price_info})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/send_telegram', methods=['POST'])
-def api_send_telegram():
-    data = request.json or {}
-    try:
-        msg = build_telegram_message(data.get('corp_name'), data.get('report_nm'),
-                                      data.get('rcept_dt'), data.get('rcept_no'),
-                                      data.get('summary'), data.get('price_info'))
-        return jsonify({'sent': send_telegram(msg)})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monitor/start', methods=['POST'])
-def api_start():
-    global _monitor_on, _interval_min
-    _interval_min = int((request.json or {}).get('interval', 60))
-    if not _monitor_on:
-        _monitor_on = True
-        _stop_event.clear()
-        threading.Thread(target=monitor_loop, daemon=True).start()
-    return jsonify({'running': _monitor_on})
-
-@app.route('/api/monitor/stop', methods=['POST'])
-def api_stop():
-    global _monitor_on
-    _stop_event.set()
-    _monitor_on = False
-    return jsonify({'running': False})
-
-@app.route('/api/status')
-def api_status():
-    with _logs_lock:
-        logs = list(_logs[-8:])
-    return jsonify({'running': _monitor_on, 'interval': _interval_min, 'logs': logs})
-
 try:
     init_db()
-    print("DB 초기화 완료", flush=True)
+    print("DB init complete", flush=True)
 except Exception as e:
-    print(f"DB 초기화 실패: {e}", flush=True)
+    print(f"DB init failed: {e}", flush=True)
 
 
 if __name__ == '__main__':
-    load_seen()
     app.run(debug=False, port=5000, threaded=True)
