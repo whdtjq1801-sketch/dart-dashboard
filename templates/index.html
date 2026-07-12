@@ -90,6 +90,7 @@ header {
 
 /* ── main layout ── */
 .main { flex: 1; display: flex; gap: 14px; padding: 16px 20px; overflow: hidden; }
+.main.hidden { display: none; }
 .panel {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden;
@@ -98,6 +99,8 @@ header {
 .panel-right { flex: 1; min-width: 0; }
 
 /* ── tabs ── */
+.tabs-bar { background: var(--card); border-bottom: 1px solid var(--line); padding: 0 20px; flex-shrink: 0; }
+.tabs-bar .tabs { border-bottom: none; background: transparent; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); flex-shrink: 0; background: var(--paper); }
 .tab {
   padding: 11px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
@@ -258,6 +261,42 @@ button.action:disabled { opacity: .5; cursor: default; }
 
 .empty { color: var(--muted-soft); font-size: 13px; padding: 16px 4px; text-align: center; }
 
+/* ── market issues news feed ── */
+.news-feed { flex: 1; display: none; flex-direction: column; overflow: hidden; padding: 16px 20px; }
+.news-feed.active { display: flex; }
+.news-toolbar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-bottom: 14px; }
+.news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 820px; margin: 0 auto; width: 100%; padding-bottom: 24px; }
+
+.news-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm); overflow: hidden; transition: box-shadow .15s, border-color .15s;
+  flex-shrink: 0;
+}
+.news-card:hover { box-shadow: var(--shadow-md); border-color: var(--primary-line); }
+.news-card-main { display: flex; gap: 16px; padding: 14px; cursor: pointer; }
+.news-thumb {
+  flex-shrink: 0; width: 220px; aspect-ratio: 16/9; border-radius: var(--radius-sm);
+  object-fit: cover; background: var(--paper);
+}
+.news-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.news-meta { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted-soft); }
+.news-channel { color: var(--primary); font-weight: 700; }
+.news-title { font-size: 16px; font-weight: 700; line-height: 1.4; color: var(--ink); }
+.news-preview {
+  font-size: 13px; color: var(--muted); line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.news-toggle {
+  font-size: 11.5px; color: var(--primary); font-weight: 700; margin-top: auto;
+  display: flex; align-items: center; gap: 4px;
+}
+.news-toggle .chev { transition: transform .15s; display: inline-block; }
+.news-card.expanded .news-toggle .chev { transform: rotate(180deg); }
+
+.news-detail { display: none; border-top: 1px solid var(--line-soft); padding: 18px; background: var(--paper); }
+.news-card.expanded .news-detail { display: block; }
+.news-detail .gpt-text { font-size: 13.5px; line-height: 1.9; white-space: pre-wrap; }
+
 @media (max-width: 768px) {
   .main { flex-direction: column; overflow: visible; }
   body { height: auto; }
@@ -265,6 +304,8 @@ button.action:disabled { opacity: .5; cursor: default; }
   .panel-right { min-height: 320px; }
   .tip { margin: 12px 12px 0; }
   .main { padding: 10px; }
+  .news-card-main { flex-direction: column; }
+  .news-thumb { width: 100%; }
 }
 
 /* ── email gate ── */
@@ -321,16 +362,18 @@ button.action:disabled { opacity: .5; cursor: default; }
   <button class="tip-close" onclick="document.getElementById('tip').classList.add('hidden')">✕</button>
 </div>
 
-<div class="main">
+<div class="tabs-bar">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('companies',this)">Watchlist</div>
+    <div class="tab" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
+    <div class="tab" onclick="showTab('market',this)">시황 <span class="badge" id="marketBadge" style="display:none">0</span></div>
+  </div>
+</div>
+
+<div class="main" id="mainSplit">
 
   <!-- LEFT -->
   <div class="panel panel-left">
-    <div class="tabs">
-      <div class="tab active" onclick="showTab('companies',this)">Watchlist</div>
-      <div class="tab" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
-      <div class="tab" onclick="showTab('market',this)">시황 <span class="badge" id="marketBadge" style="display:none">0</span></div>
-    </div>
-
     <!-- Watchlist tab -->
     <div class="tab-body active" id="tab-companies">
       <div class="tab-scroll">
@@ -362,17 +405,6 @@ button.action:disabled { opacity: .5; cursor: default; }
         <p class="empty" style="padding:12px">Add a company, then click "Search filings".</p>
       </div>
     </div>
-
-    <!-- Market issues tab -->
-    <div class="tab-body" id="tab-market">
-      <div class="disc-toolbar">
-        <button class="action btn-blue" onclick="loadMarketIssues()" id="marketBtn">🔄 새로고침</button>
-        <span class="disc-count" id="marketCount"></span>
-      </div>
-      <div class="disc-list" id="marketList">
-        <p class="empty" style="padding:12px">버튼을 눌러 최신 영상을 불러오세요.</p>
-      </div>
-    </div>
   </div>
 
   <!-- RIGHT -->
@@ -386,6 +418,17 @@ button.action:disabled { opacity: .5; cursor: default; }
     </div>
   </div>
 
+</div>
+
+<!-- Market issues (시황) - full-width news feed, shown instead of .main -->
+<div class="news-feed" id="marketFeedWrap">
+  <div class="news-toolbar">
+    <button class="action btn-blue" onclick="loadMarketIssues()" id="marketBtn">🔄 새로고침</button>
+    <span class="disc-count" id="marketCount"></span>
+  </div>
+  <div class="news-list" id="marketList">
+    <p class="empty" style="padding:12px">버튼을 눌러 최신 영상을 불러오세요.</p>
+  </div>
 </div>
 
 <script>
@@ -430,12 +473,22 @@ function initApp() {
 // ── tab switch ────────────────────────────────────────
 function showTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-body').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'market' && !document.getElementById('marketList').dataset.loaded) {
-    loadMarketIssues();
+
+  const mainSplit   = document.getElementById('mainSplit');
+  const marketFeed  = document.getElementById('marketFeedWrap');
+
+  if (name === 'market') {
+    mainSplit.classList.add('hidden');
+    marketFeed.classList.add('active');
+    if (!document.getElementById('marketList').dataset.loaded) loadMarketIssues();
+    return;
   }
+
+  mainSplit.classList.remove('hidden');
+  marketFeed.classList.remove('active');
+  document.querySelectorAll('.tab-body').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
 }
 
 // ── companies ─────────────────────────────────────────
@@ -784,40 +837,61 @@ async function loadMarketIssues() {
 function render_market(list) {
   const el = document.getElementById('marketList');
   if (!list.length) { el.innerHTML = '<p class="empty" style="padding:12px">아직 정리된 영상이 없습니다. 배치 작업이 실행되면 채워집니다.</p>'; return; }
-  el.innerHTML = list.map((v, i) =>
-    `<div class="disc-item" id="mi${i}" onclick="onMarketClick(${i},this)">
-       <div><span class="disc-corp">[${v.channel_name}]</span> ${v.title}</div>
-       <div class="disc-date">${(v.published_at || '').slice(0, 10)}</div>
-     </div>`
-  ).join('');
+  el.innerHTML = list.map((v, i) => {
+    const preview = v.summary
+      ? (v.summary.length > 110 ? v.summary.slice(0, 110) + '…' : v.summary)
+      : '요약을 준비 중입니다 — 펼치면 바로 만들어드려요.';
+    return `
+    <div class="news-card" id="nc${i}">
+      <div class="news-card-main" onclick="toggleNewsCard(${i})">
+        <img class="news-thumb" src="${v.thumbnail}" alt="" loading="lazy">
+        <div class="news-body">
+          <div class="news-meta">
+            <span class="news-channel">${v.channel_name}</span>
+            <span>·</span>
+            <span>${(v.published_at || '').slice(0, 10)}</span>
+          </div>
+          <div class="news-title">${v.title}</div>
+          <div class="news-preview">${preview}</div>
+          <div class="news-toggle"><span id="nc${i}-toggle-text">요약 보기</span><span class="chev">▾</span></div>
+        </div>
+      </div>
+      <div class="news-detail" id="nc${i}-detail"></div>
+    </div>`;
+  }).join('');
 }
 
-function renderMarketSummary(v, summary) {
-  document.getElementById('gptBody').innerHTML =
-    `<div class="gpt-corp">[${v.channel_name}] ${v.title}</div>
-     <div class="gpt-date">게시일: ${(v.published_at || '').slice(0, 10)}</div>
-     <hr class="gpt-divider">
-     <div class="gpt-text">${summary}</div>
-     <div class="action-row">
-       <a class="dart-link" href="${v.url}" target="_blank">▶ 유튜브에서 보기</a>
-     </div>`;
+function renderNewsDetail(v, summary) {
+  return `<div class="gpt-text">${summary}</div>
+    <div class="action-row">
+      <a class="dart-link" href="${v.url}" target="_blank">▶ 유튜브에서 보기</a>
+    </div>`;
 }
 
-async function onMarketClick(idx, el) {
-  document.querySelectorAll('.disc-item').forEach(e => e.classList.remove('sel'));
-  el.classList.add('sel');
+async function toggleNewsCard(idx) {
+  const card       = document.getElementById('nc' + idx);
+  const detail     = document.getElementById('nc' + idx + '-detail');
+  const toggleText = document.getElementById('nc' + idx + '-toggle-text');
+
+  if (card.classList.contains('expanded')) {
+    card.classList.remove('expanded');
+    toggleText.textContent = '요약 보기';
+    return;
+  }
+  card.classList.add('expanded');
+  toggleText.textContent = '접기';
+
   const v = _marketItems[idx];
 
   // Normal path: the batch job already pre-computed this, so it's just a
   // render - no network call needed.
   if (v.summary) {
-    renderMarketSummary(v, v.summary);
+    detail.innerHTML = renderNewsDetail(v, v.summary);
     return;
   }
 
   // Fallback: video hasn't been picked up by the batch job yet.
-  document.getElementById('gptBody').innerHTML =
-    `<div class="loading-msg"><div class="spin"></div> GPT로 요약 중... <span style="color:var(--muted-soft);font-size:12px">[${v.channel_name}] ${v.title}</span></div>`;
+  detail.innerHTML = `<div class="loading-msg"><div class="spin"></div> GPT로 요약 중...</div>`;
 
   try {
     const r = await apiFetch('/api/market-issues/summarize', {
@@ -831,15 +905,17 @@ async function onMarketClick(idx, el) {
     if (r.status === 401) { showGate(); return; }
     const res = await r.json();
     if (res.error) {
-      document.getElementById('gptBody').innerHTML =
-        `<div class="error-box"><div><div class="title">요약 생성 실패</div>${res.error}</div></div>`;
+      detail.innerHTML = `<div class="error-box"><div><div class="title">요약 생성 실패</div>${res.error}</div></div>`;
       return;
     }
     v.summary = res.summary;
-    renderMarketSummary(v, res.summary);
+    detail.innerHTML = renderNewsDetail(v, res.summary);
+    const previewEl = card.querySelector('.news-preview');
+    if (previewEl) {
+      previewEl.textContent = res.summary.length > 110 ? res.summary.slice(0, 110) + '…' : res.summary;
+    }
   } catch (e) {
-    document.getElementById('gptBody').innerHTML =
-      `<div class="error-box"><div><div class="title">Something went wrong</div>다시 시도해주세요.</div></div>`;
+    detail.innerHTML = `<div class="error-box"><div><div class="title">Something went wrong</div>다시 시도해주세요.</div></div>`;
   }
 }
 
