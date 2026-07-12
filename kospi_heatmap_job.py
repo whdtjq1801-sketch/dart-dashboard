@@ -27,7 +27,13 @@ from app import fetch_kospi_top_stocks, classify_sectors, get_existing_sectors, 
 
 
 def run():
-    stocks = fetch_kospi_top_stocks(KOSPI_HEATMAP_TOP_N)
+    try:
+        stocks = fetch_kospi_top_stocks(KOSPI_HEATMAP_TOP_N)
+    except Exception as e:
+        # A FinanceDataReader hiccup shouldn't leave yesterday's snapshot
+        # silently stale with no error - fail loudly instead of no-op.
+        print(f'could not fetch KOSPI listing: {e}', flush=True)
+        return
     print(f'{len(stocks)} KOSPI stocks fetched (top {KOSPI_HEATMAP_TOP_N} by market cap)', flush=True)
 
     existing = get_existing_sectors([s['ticker'] for s in stocks])
@@ -42,7 +48,10 @@ def run():
             print(f'sector classification failed: {e}', flush=True)
 
     for s in stocks:
-        s['sector'] = sectors.get(s['ticker'], 'Industrials')
+        # None (not a default like 'Industrials') for a ticker GPT never
+        # returned - a fake-but-cached sector would otherwise look
+        # "classified" and never get retried on a later run.
+        s['sector'] = sectors.get(s['ticker'])
 
     save_kospi_snapshot(stocks)
     print('kospi heatmap job done', flush=True)

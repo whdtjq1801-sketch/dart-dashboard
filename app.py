@@ -323,17 +323,22 @@ def get_cached_video_summary(video_id):
     }
 
 def save_video_summary(video_id, channel_name, title, title_en, published_at, summary, summary_en):
+    # If a prior write left this row with an empty/NULL summary_en (e.g. GPT's
+    # JSON omitted the key), a later call with a good summary should repair
+    # it in place rather than silently discarding the fix.
     sql = """
         INSERT INTO video_summaries (video_id, channel_name, title, title_en, published_at, summary, summary_en)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (video_id) DO NOTHING
+        ON CONFLICT (video_id) DO UPDATE SET
+            title_en = EXCLUDED.title_en, summary = EXCLUDED.summary, summary_en = EXCLUDED.summary_en
+        WHERE video_summaries.summary_en IS NULL OR video_summaries.summary_en = ''
     """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (video_id, channel_name, title, title_en, published_at, summary, summary_en))
 
 def get_rows_missing_english():
-    sql = "SELECT video_id, channel_name, title, summary FROM video_summaries WHERE summary_en IS NULL"
+    sql = "SELECT video_id, channel_name, title, summary FROM video_summaries WHERE summary_en IS NULL OR summary_en = ''"
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -1003,10 +1008,12 @@ def save_kospi_snapshot(stocks_with_sector):
         INSERT INTO kospi_heatmap (ticker, name, sector, market_cap, change_pct, close_price, updated_at)
         VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (ticker) DO UPDATE SET
-            name = EXCLUDED.name, sector = EXCLUDED.sector,
+            name = EXCLUDED.name,
+            sector = COALESCE(EXCLUDED.sector, kospi_heatmap.sector),
             market_cap = EXCLUDED.market_cap, change_pct = EXCLUDED.change_pct,
             close_price = EXCLUDED.close_price, updated_at = CURRENT_TIMESTAMP
     """
+    tickers = [s['ticker'] for s in stocks_with_sector]
     with get_db() as conn:
         with conn.cursor() as cur:
             for s in stocks_with_sector:
@@ -1014,6 +1021,10 @@ def save_kospi_snapshot(stocks_with_sector):
                     s['ticker'], s['name'], s['sector'],
                     s['market_cap'], s['change_pct'], s['close_price']
                 ))
+            # Drop anything that fell out of today's top-N so a stale market
+            # cap from a stock that's no longer in it can't outrank a
+            # current constituent in the ORDER BY market_cap DESC LIMIT.
+            cur.execute("DELETE FROM kospi_heatmap WHERE ticker != ALL(%s)", (tickers,))
 
 # ── Flask ──────────────────────────────────────────────
 app = Flask(__name__)

@@ -401,10 +401,10 @@ button.action:disabled { opacity: .5; cursor: default; }
 
 <div class="tabs-bar">
   <div class="tabs">
-    <div class="tab active" onclick="showTab('market',this)">Market News <span class="badge" id="marketBadge" style="display:none">0</span></div>
-    <div class="tab" onclick="showTab('heatmap',this)">Heatmap</div>
-    <div class="tab" onclick="showTab('companies',this)">Watchlist</div>
-    <div class="tab" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
+    <div class="tab active" id="tabBtn-market" onclick="showTab('market',this)">Market News <span class="badge" id="marketBadge" style="display:none">0</span></div>
+    <div class="tab" id="tabBtn-heatmap" onclick="showTab('heatmap',this)">Heatmap</div>
+    <div class="tab" id="tabBtn-companies" onclick="showTab('companies',this)">Watchlist</div>
+    <div class="tab" id="tabBtn-disclosures" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
   </div>
 </div>
 
@@ -519,6 +519,7 @@ function submitGate() {
   document.getElementById('gateOverlay').classList.add('hidden');
   err.textContent = '';
   loadCompanies();
+  loadMarketIssues();
 }
 
 function initApp() {
@@ -781,7 +782,7 @@ async function loadDiscs() {
   const btn = document.getElementById('searchBtn');
   if (!window._companies || !window._companies.length) {
     document.getElementById('discCount').textContent = 'Add a company to your watchlist first';
-    showTab('disclosures', document.querySelectorAll('.tab')[1]);
+    showTab('disclosures', document.getElementById('tabBtn-disclosures'));
     return;
   }
   const orig = btn.innerHTML;
@@ -805,7 +806,7 @@ async function loadDiscs() {
     const badge = document.getElementById('discBadge');
     badge.textContent = data.length;
     badge.style.display = data.length ? 'inline-block' : 'none';
-    showTab('disclosures', document.querySelectorAll('.tab')[1]);
+    showTab('disclosures', document.getElementById('tabBtn-disclosures'));
   } catch(e) {
     document.getElementById('discList').innerHTML =
       `<div class="error-box"><div><div class="title">Network error</div>Could not reach the server. Please try again.</div></div>`;
@@ -898,7 +899,7 @@ const MARKET_LABELS = {
 };
 function L() { return MARKET_LABELS[_marketLang]; }
 function marketTitle(v) { return _marketLang === 'en' ? (v.title_en || v.title) : v.title; }
-function marketSummary(v) { return _marketLang === 'en' ? v.summary_en : (v.summary || v.summary_en); }
+function marketSummary(v) { return _marketLang === 'en' ? (v.summary_en || v.summary) : (v.summary || v.summary_en); }
 
 function setMarketLang(lang) {
   _marketLang = lang;
@@ -1012,7 +1013,11 @@ async function toggleNewsCard(idx) {
         channel_name: v.channel_name, published_at: v.published_at
       })
     });
-    if (r.status === 401) { showGate(); return; }
+    if (r.status === 401) {
+      detail.innerHTML = `<div class="error-box"><div><div class="title">${L().summarizeFailed}</div></div></div>`;
+      showGate();
+      return;
+    }
     const res = await r.json();
     if (res.error) {
       detail.innerHTML = `<div class="error-box"><div><div class="title">${L().summarizeFailed}</div>${res.error}</div></div>`;
@@ -1134,12 +1139,14 @@ function lerpColor(a, b, t) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 function divergingColor(pct) {
+  pct = Number(pct) || 0;
   const cap = 5;
   const t = Math.max(-1, Math.min(1, pct / cap));
   const NEUTRAL = '#f0efec', RED = '#e34948', BLUE = '#2a78d6';
   return t >= 0 ? lerpColor(NEUTRAL, RED, t) : lerpColor(NEUTRAL, BLUE, -t);
 }
 function textColorFor(pct) {
+  pct = Number(pct) || 0;
   // Cells near zero keep the light neutral fill - dark text reads better there.
   return Math.abs(pct) / 5 > 0.35 ? '#ffffff' : 'var(--ink)';
 }
@@ -1169,7 +1176,10 @@ function renderHeatmap() {
   if (w < 10 || h < 10) return;
 
   const bySector = {};
-  _heatmapItems.forEach(it => { (bySector[it.sector] = bySector[it.sector] || []).push(it); });
+  _heatmapItems.forEach(it => {
+    const sec = it.sector || 'Other';
+    (bySector[sec] = bySector[sec] || []).push(it);
+  });
   const sectorItems = Object.keys(bySector).map(sec => ({
     value: bySector[sec].reduce((s, i) => s + i.market_cap, 0),
     sector: sec, stocks: bySector[sec],
@@ -1187,15 +1197,16 @@ function renderHeatmap() {
     const stockRects = squarify(stockItems, sr.x, innerY, sr.w, innerH);
     for (const cr of stockRects) {
       const s = cr.item.stock;
-      const bg = divergingColor(s.change_pct);
-      const fg = textColorFor(s.change_pct);
+      const chg = Number(s.change_pct) || 0;
+      const bg = divergingColor(chg);
+      const fg = textColorFor(chg);
       const showText = cr.w > 32 && cr.h > 22;
       // Scale font down for small cells so short-form names fit two lines
       // instead of being ellipsis-truncated to nothing useful.
       const fontPx = Math.max(9, Math.min(13, Math.round(Math.min(cr.w / 7, cr.h / 3))));
       html += `<div class="heatmap-cell" style="left:${cr.x}px;top:${cr.y}px;width:${cr.w}px;height:${cr.h}px;background:${bg};color:${fg};font-size:${fontPx}px"
         onmouseenter="showHeatmapTip(event,'${s.ticker}')" onmousemove="moveHeatmapTip(event)" onmouseleave="hideHeatmapTip()">
-        ${showText ? `<div class="name">${shortDisplayName(s.name_en || s.name)}</div><div class="chg">${s.change_pct > 0 ? '+' : ''}${s.change_pct.toFixed(2)}%</div>` : ''}
+        ${showText ? `<div class="name">${shortDisplayName(s.name_en || s.name)}</div><div class="chg">${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>` : ''}
       </div>`;
     }
   }
@@ -1205,10 +1216,11 @@ function renderHeatmap() {
 function showHeatmapTip(evt, ticker) {
   const s = _heatmapItems.find(x => x.ticker === ticker);
   if (!s) return;
+  const chg = Number(s.change_pct) || 0;
   const tip = document.getElementById('heatmapTooltip');
   tip.innerHTML = `<div class="t-name">${s.name_en || s.name}</div>
     <div class="t-row">${s.sector}</div>
-    <div class="t-row">Change: ${s.change_pct > 0 ? '+' : ''}${s.change_pct.toFixed(2)}%</div>
+    <div class="t-row">Change: ${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>
     <div class="t-row">Market cap: ${(s.market_cap / 1e12).toFixed(2)}T KRW</div>
     <div class="t-row">Close: ${s.close_price.toLocaleString()} KRW</div>`;
   tip.classList.add('show');

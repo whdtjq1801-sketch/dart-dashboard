@@ -61,7 +61,13 @@ def run():
     backfill_missing_english()
 
     for channel_name, channel_id in MARKET_CHANNELS.items():
-        videos = fetch_channel_videos(channel_id, max_results=MAX_VIDEOS_PER_CHANNEL)
+        try:
+            videos = fetch_channel_videos(channel_id, max_results=MAX_VIDEOS_PER_CHANNEL)
+        except Exception as e:
+            # One channel's RSS feed being unreachable shouldn't stop the
+            # other channels from being processed.
+            print(f'[{channel_name}] could not fetch feed: {e}', flush=True)
+            continue
         print(f'[{channel_name}] {len(videos)} videos in feed', flush=True)
         for v in videos:
             if video_exists(v['video_id']):
