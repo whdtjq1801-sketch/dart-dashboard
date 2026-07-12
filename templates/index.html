@@ -101,11 +101,11 @@ header {
 /* ── tabs ── */
 .tabs-bar { background: var(--card); border-bottom: 1px solid var(--line); padding: 0 20px; flex-shrink: 0; }
 .tabs-bar .tabs { border-bottom: none; background: transparent; }
-.tabs { display: flex; border-bottom: 1px solid var(--line); flex-shrink: 0; background: var(--paper); }
+.tabs { display: flex; border-bottom: 1px solid var(--line); flex-shrink: 0; background: var(--paper); overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .tab {
   padding: 11px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
   color: var(--muted); border-bottom: 2px solid transparent; transition: all .15s; user-select: none;
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap;
 }
 .tab:hover { color: var(--ink); }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; background: var(--card); }
@@ -352,6 +352,14 @@ button.action:disabled { opacity: .5; cursor: default; }
   .main { padding: 10px; }
   .news-card-main { flex-direction: column; }
   .news-thumb { width: 100%; }
+
+  /* A nested treemap squeezed into a phone's width is unreadable if it's
+     also squeezed into a short height - give it a tall canvas and let the
+     page scroll, instead of clipping cells to slivers. */
+  .heatmap-feed { overflow: visible; padding: 10px; }
+  .heatmap-container { flex: none; height: 1100px; overflow: visible; }
+  .heatmap-index-bar { flex-wrap: wrap; }
+  .heatmap-index-bar .idx-fx { margin-left: 0; flex-basis: 100%; }
 }
 
 /* ── email gate ── */
