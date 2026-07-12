@@ -154,6 +154,16 @@ def init_db():
     ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS title_en VARCHAR(300);
     ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS summary_en TEXT;
 
+    CREATE TABLE IF NOT EXISTS kospi_heatmap (
+        ticker VARCHAR(10) PRIMARY KEY,
+        name VARCHAR(100),
+        sector VARCHAR(40),
+        market_cap BIGINT,
+        change_pct NUMERIC(6,2),
+        close_price BIGINT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     """
 
     with get_db() as conn:
@@ -884,6 +894,127 @@ def translate_summary_to_english(channel_name, title_ko, summary_ko):
     data = json.loads(resp.choices[0].message.content)
     return {'title_en': data.get('title_en') or title_ko, 'summary_en': data.get('summary_en', '')}
 
+# ── KOSPI market-cap heatmap ────────────────────────────
+KOSPI_HEATMAP_TOP_N = 80
+
+SECTOR_CHOICES = [
+    'Technology', 'Consumer Cyclical', 'Consumer Staples', 'Healthcare',
+    'Financials', 'Industrials', 'Materials', 'Energy',
+    'Communication Services', 'Utilities', 'Real Estate',
+]
+
+# Cheap correction pass for company-name suffixes GPT sometimes gets wrong
+# (e.g. it tends to bucket any "holding company" as Financials regardless of
+# the group's actual business). Checked in order, first match wins.
+SECTOR_KEYWORDS = [
+    ('조선해양', 'Industrials'), ('중공업', 'Industrials'), ('조선', 'Industrials'),
+    ('해운', 'Industrials'), ('항공우주', 'Industrials'), ('건설', 'Industrials'),
+    ('은행', 'Financials'), ('증권', 'Financials'), ('생명', 'Financials'),
+    ('화재', 'Financials'), ('손해보험', 'Financials'), ('카드', 'Financials'),
+    ('캐피탈', 'Financials'), ('금융지주', 'Financials'),
+    ('제약', 'Healthcare'), ('바이오', 'Healthcare'), ('헬스케어', 'Healthcare'),
+    ('반도체', 'Technology'), ('전자', 'Technology'), ('소프트웨어', 'Technology'),
+    ('화학', 'Materials'), ('제철', 'Materials'), ('철강', 'Materials'),
+    ('통신', 'Communication Services'),
+    ('전력', 'Utilities'), ('가스', 'Utilities'),
+]
+
+# A handful of well-known tickers whose name carries no industry-indicating
+# keyword (pure group holding companies) but where GPT's default guess
+# ("Financials", since it's a holding structure) is wrong.
+SECTOR_TICKER_OVERRIDES = {
+    '267250': 'Industrials',  # HD현대 - shipbuilding/machinery group holding co
+}
+
+def apply_sector_keyword_overrides(ticker, name, gpt_sector):
+    if ticker in SECTOR_TICKER_OVERRIDES:
+        return SECTOR_TICKER_OVERRIDES[ticker]
+    for keyword, sector in SECTOR_KEYWORDS:
+        if keyword in name:
+            return sector
+    return gpt_sector
+
+def fetch_kospi_top_stocks(top_n=KOSPI_HEATMAP_TOP_N):
+    """Top-N KOSPI stocks by market cap, with an industry-description hint
+    for sector classification. FinanceDataReader is imported here (not at
+    module load) since only this batch-only function needs it - the
+    always-running Flask process never calls it."""
+    import FinanceDataReader as fdr
+    kospi = fdr.StockListing('KOSPI')
+    desc = fdr.StockListing('KRX-DESC')[['Code', 'Industry']]
+    merged = kospi.merge(desc, on='Code', how='left')
+    top = merged.sort_values('Marcap', ascending=False).head(top_n)
+    return [{
+        'ticker':        r['Code'],
+        'name':          r['Name'],
+        'market_cap':    int(r['Marcap']),
+        'change_pct':    float(r['ChagesRatio']),
+        'close_price':   int(r['Close']),
+        'industry_hint': r['Industry'] if isinstance(r['Industry'], str) else '',
+    } for _, r in top.iterrows()]
+
+def classify_sectors(stocks):
+    """One GPT call classifies every given stock at once. Returns
+    {ticker: sector}. Caller should only pass tickers not already
+    classified in the DB - a stock's sector essentially never changes, so
+    there's no need to re-spend a call on it once it's cached."""
+    lines = [f"{s['ticker']}: {s['name']} ({s['industry_hint'] or 'N/A'})" for s in stocks]
+    prompt = (
+        'Classify each Korean-listed KOSPI company below into exactly one of these '
+        'sectors: ' + ', '.join(SECTOR_CHOICES) + '.\n\n'
+        'Use your own knowledge of the company first - the Korean industry text in '
+        'parentheses is often just a generic legal-entity classification (e.g. many '
+        'holding companies are filed under a generic "other business" industry code) '
+        'and should not override what you know about the company. For a holding '
+        'company ("지주", "홀딩스"), classify by its largest underlying operating '
+        'business (e.g. a shipbuilding holding company is Industrials, a bank holding '
+        'company is Financials) - do not default to Financials just because it is a '
+        'holding structure.\n\n'
+        'Respond with a JSON object mapping each 6-digit ticker code to its sector '
+        'name exactly as spelled above.\n\n' + '\n'.join(lines)
+    )
+    resp = openai_client.chat.completions.create(
+        model='gpt-4o-mini',
+        response_format={'type': 'json_object'},
+        messages=[{'role': 'user', 'content': prompt}],
+        max_tokens=2000,
+        temperature=0,
+    )
+    raw = json.loads(resp.choices[0].message.content)
+    name_by_ticker = {s['ticker']: s['name'] for s in stocks}
+    result = {}
+    for ticker, sector in raw.items():
+        if sector not in SECTOR_CHOICES:
+            sector = 'Industrials'  # unrecognized label from the model - safe generic bucket
+        result[ticker] = apply_sector_keyword_overrides(ticker, name_by_ticker.get(ticker, ''), sector)
+    return result
+
+def get_existing_sectors(tickers):
+    if not tickers:
+        return {}
+    sql = "SELECT ticker, sector FROM kospi_heatmap WHERE ticker = ANY(%s) AND sector IS NOT NULL"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (tickers,))
+            return {r['ticker']: r['sector'] for r in cur.fetchall()}
+
+def save_kospi_snapshot(stocks_with_sector):
+    sql = """
+        INSERT INTO kospi_heatmap (ticker, name, sector, market_cap, change_pct, close_price, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (ticker) DO UPDATE SET
+            name = EXCLUDED.name, sector = EXCLUDED.sector,
+            market_cap = EXCLUDED.market_cap, change_pct = EXCLUDED.change_pct,
+            close_price = EXCLUDED.close_price, updated_at = CURRENT_TIMESTAMP
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for s in stocks_with_sector:
+                cur.execute(sql, (
+                    s['ticker'], s['name'], s['sector'],
+                    s['market_cap'], s['change_pct'], s['close_price']
+                ))
+
 # ── Flask ──────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -1177,6 +1308,39 @@ def api_market_issues_summarize():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/kospi-heatmap')
+def api_kospi_heatmap():
+    """Reads the daily KOSPI snapshot straight from Postgres - like the
+    market-issues tab, this never calls out to FinanceDataReader/OpenAI
+    itself. A scheduled batch job (kospi_heatmap_job.py) keeps the table
+    fresh."""
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    try:
+        sql = """
+            SELECT ticker, name, sector, market_cap, change_pct, close_price, updated_at
+            FROM kospi_heatmap
+            ORDER BY market_cap DESC
+            LIMIT %s
+        """
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (KOSPI_HEATMAP_TOP_N,))
+                rows = cur.fetchall()
+        items = [{
+            'ticker':      r['ticker'],
+            'name':        r['name'],
+            'sector':      r['sector'],
+            'market_cap':  r['market_cap'],
+            'change_pct':  float(r['change_pct']) if r['change_pct'] is not None else 0.0,
+            'close_price': r['close_price'],
+        } for r in rows]
+        updated_at = rows[0]['updated_at'].isoformat() if rows else None
+        return jsonify({'items': items, 'updated_at': updated_at})
+    except Exception as e:
+        return jsonify({'error': f'Could not load KOSPI heatmap: {e}'}), 500
 
 try:
     init_db()
