@@ -1241,7 +1241,8 @@ function cellLabel(name, ticker, w, fontPx) {
   if (fitsInLines(full, fontPx, 2, lineWidth)) return full;
   const firstWord = full.split(' ')[0];
   if (textWidthPx(firstWord, fontPx) <= lineWidth) return firstWord;
-  return ticker;
+  if (textWidthPx(ticker, fontPx) <= lineWidth) return ticker;
+  return '';
 }
 
 const SECTOR_HEADER_H = 20;
@@ -1280,14 +1281,27 @@ function renderHeatmap() {
       const chg = Number(s.change_pct) || 0;
       const bg = divergingColor(chg);
       const fg = textColorFor(chg);
-      const showText = cr.w > 32 && cr.h > 22;
       // Scale font down for small cells so short-form names fit two lines
       // instead of being ellipsis-truncated to nothing useful.
-      const fontPx = Math.max(8, Math.min(13, Math.round(Math.min(cr.w / 7, cr.h / 3))));
-      const label = showText ? cellLabel(s.name_en || s.name, s.ticker, cr.w, fontPx) : '';
+      const fontPx = Math.max(7, Math.min(13, Math.round(Math.min(cr.w / 6, cr.h / 3))));
+      const chgText = `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`;
+
+      // Every cell big enough to hold *anything* readable gets at least the
+      // ticker or the % change - a blank colored square with no label at
+      // all (the old cr.w>32 && cr.h>22 gate) was the actual complaint,
+      // not just long names getting cut off.
+      let inner = '';
+      if (cr.w > 16 && cr.h > 11) {
+        const label = cellLabel(s.name_en || s.name, s.ticker, cr.w, fontPx);
+        if (label) {
+          inner = `<div class="name">${label}</div><div class="chg">${chgText}</div>`;
+        } else if (textWidthPx(chgText, fontPx) <= cr.w - 4) {
+          inner = `<div class="chg">${chgText}</div>`;
+        }
+      }
       html += `<div class="heatmap-cell" style="left:${cr.x}px;top:${cr.y}px;width:${cr.w}px;height:${cr.h}px;background:${bg};color:${fg};font-size:${fontPx}px"
         onmouseenter="showHeatmapTip(event,'${s.ticker}')" onmousemove="moveHeatmapTip(event)" onmouseleave="hideHeatmapTip()">
-        ${showText ? `<div class="name">${label}</div><div class="chg">${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>` : ''}
+        ${inner}
       </div>`;
     }
   }
