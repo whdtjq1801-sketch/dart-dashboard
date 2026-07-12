@@ -319,7 +319,11 @@ button.action:disabled { opacity: .5; cursor: default; }
   overflow: hidden; padding: 2px; cursor: default; transition: filter .1s;
 }
 .heatmap-cell:hover { filter: brightness(1.08); z-index: 5; }
-.heatmap-cell .name { font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.heatmap-cell .name {
+  font-weight: 700; line-height: 1.2; max-width: 100%; text-align: center;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: normal; word-break: break-word;
+}
 .heatmap-cell .chg { font-weight: 600; opacity: .92; }
 .heatmap-tooltip {
   position: fixed; z-index: 50; pointer-events: none; display: none;
@@ -1140,6 +1144,19 @@ function textColorFor(pct) {
   return Math.abs(pct) / 5 > 0.35 ? '#ffffff' : 'var(--ink)';
 }
 
+// DART's official English names are things like "SAMSUNG ELECTRONICS
+// CO,.LTD" - too long to read in a small cell. Strip the corporate suffix
+// and title-case it for the on-cell label; the tooltip still shows the
+// full official name.
+function shortDisplayName(name) {
+  if (!name) return '';
+  let s = name.replace(/,?\s*(CO\.?,?\s*LTD\.?|CORPORATION|CORP\.?|INCORPORATED|INC\.?|COMPANY|CO\.?)\s*$/i, '').trim();
+  if (s === s.toUpperCase() && /[A-Z]/.test(s)) {
+    s = s.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  }
+  return s || name;
+}
+
 const SECTOR_HEADER_H = 20;
 
 function renderHeatmap() {
@@ -1172,10 +1189,13 @@ function renderHeatmap() {
       const s = cr.item.stock;
       const bg = divergingColor(s.change_pct);
       const fg = textColorFor(s.change_pct);
-      const showText = cr.w > 44 && cr.h > 28;
-      html += `<div class="heatmap-cell" style="left:${cr.x}px;top:${cr.y}px;width:${cr.w}px;height:${cr.h}px;background:${bg};color:${fg}"
+      const showText = cr.w > 32 && cr.h > 22;
+      // Scale font down for small cells so short-form names fit two lines
+      // instead of being ellipsis-truncated to nothing useful.
+      const fontPx = Math.max(9, Math.min(13, Math.round(Math.min(cr.w / 7, cr.h / 3))));
+      html += `<div class="heatmap-cell" style="left:${cr.x}px;top:${cr.y}px;width:${cr.w}px;height:${cr.h}px;background:${bg};color:${fg};font-size:${fontPx}px"
         onmouseenter="showHeatmapTip(event,'${s.ticker}')" onmousemove="moveHeatmapTip(event)" onmouseleave="hideHeatmapTip()">
-        ${showText ? `<div class="name">${s.name_en || s.name}</div><div class="chg">${s.change_pct > 0 ? '+' : ''}${s.change_pct.toFixed(2)}%</div>` : ''}
+        ${showText ? `<div class="name">${shortDisplayName(s.name_en || s.name)}</div><div class="chg">${s.change_pct > 0 ? '+' : ''}${s.change_pct.toFixed(2)}%</div>` : ''}
       </div>`;
     }
   }
