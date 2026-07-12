@@ -1,4 +1,5 @@
-import os, json, time, re, zipfile, io
+import os, json, time, re, zipfile, io, threading
+from collections import defaultdict, deque
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
@@ -63,6 +64,29 @@ def require_user_email():
     if not EMAIL_RE.match(email):
         return None
     return email
+
+# ── rate limiting ──────────────────────────────────────
+# In-memory sliding-window limiter. Good enough for a single gunicorn worker
+# (see Procfile); the goal is just to stop a runaway script or bot from
+# burning through the OpenAI/DART API quota, not perfect fairness.
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits = defaultdict(deque)
+
+def rate_limited(key, max_calls, window_sec):
+    """Returns True if `key` has made >= max_calls calls in the last
+    window_sec seconds (and records this call if not)."""
+    now = time.time()
+    with _rate_limit_lock:
+        hits = _rate_limit_hits[(key, max_calls, window_sec)]
+        while hits and hits[0] < now - window_sec:
+            hits.popleft()
+        if len(hits) >= max_calls:
+            return True
+        hits.append(now)
+        return False
+
+def rate_limit_key():
+    return request.headers.get("X-User-Key") or request.remote_addr or "unknown"
 
 def init_db():
     sql = """
@@ -220,6 +244,38 @@ def save_interpretation(data, summary, price_info):
                 change_rate,
                 volume
             ))
+
+
+def get_cached_interpretation(rcept_no):
+    """A GPT summary for a given filing never changes, so once anyone has
+    interpreted a filing we can serve it to everyone else for free instead
+    of paying for another OpenAI call."""
+    sql = """
+        SELECT summary, price, change_rate, volume
+        FROM disclosure_interpretations
+        WHERE rcept_no = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (rcept_no,))
+            row = cur.fetchone()
+    if not row:
+        return None
+
+    price_info = None
+    if row['price'] is not None:
+        price = float(row['price'])
+        change = float(row['change_rate']) if row['change_rate'] is not None else 0.0
+        volume = int(row['volume']) if row['volume'] is not None else 0
+        arrow = '▲' if change > 0 else '▼' if change < 0 else '-'
+        price_info = {
+            'price': price, 'change': change, 'volume': volume,
+            'price_str': f'{price:,.0f} KRW ({arrow}{abs(change):.2f}%)',
+            'volume_str': f'{volume:,} shares',
+        }
+    return {'summary': row['summary'], 'price_info': price_info}
 
 
 def download_corp_codes():
@@ -608,6 +664,8 @@ def api_get_companies():
 
 @app.route('/api/companies/search')
 def api_search_companies():
+    if rate_limited(rate_limit_key(), max_calls=60, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please slow down.'}), 429
     q = request.args.get('q', '').strip()
     if len(q) < 2:
         return jsonify([])
@@ -636,6 +694,8 @@ def api_add_company():
     email = require_user_email()
     if not email:
         return jsonify({'error': 'Please sign in with your email first.'}), 401
+    if rate_limited(rate_limit_key(), max_calls=20, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
 
     raw_name = (request.json or {}).get('name', '').strip()
     if not raw_name:
@@ -691,6 +751,8 @@ def api_disclosures():
     email = require_user_email()
     if not email:
         return jsonify({'error': 'Please sign in with your email first.'}), 401
+    if rate_limited(rate_limit_key(), max_calls=15, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
     try:
         my_companies = get_watchlist(email)
     except Exception as e:
@@ -722,9 +784,24 @@ def api_disclosures():
 @app.route('/api/interpret', methods=['POST'])
 def api_interpret():
     data = request.json or {}
+    rcept_no = data.get('rcept_no')
+
+    try:
+        cached = get_cached_interpretation(rcept_no) if rcept_no else None
+    except Exception as e:
+        print(f'get_cached_interpretation failed: {e}', flush=True)
+        cached = None
+    if cached:
+        return jsonify(cached)
+
+    # Only rate-limit the expensive path (an actual OpenAI call). Cache hits
+    # above are free, so they don't count against the limit.
+    if rate_limited(rate_limit_key(), max_calls=15, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
+
     try:
         price_info = get_stock_price(data.get('stock_code'))
-        content    = fetch_disclosure_text(data.get('rcept_no'))
+        content    = fetch_disclosure_text(rcept_no)
         summary    = interpret_with_gpt(
             data.get('corp_name'),
             data.get('report_nm'),
