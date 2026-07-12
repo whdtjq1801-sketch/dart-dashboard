@@ -306,6 +306,15 @@ button.action:disabled { opacity: .5; cursor: default; }
 .heatmap-feed.active { display: flex; }
 .heatmap-legend { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-soft); font-variant-numeric: tabular-nums; }
 .heatmap-legend-bar { width: 120px; height: 10px; border-radius: 5px; background: linear-gradient(to right, #2a78d6, #f0efec, #e34948); }
+.heatmap-index-bar {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 12px;
+  padding: 10px 16px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.heatmap-index-bar .idx-name { font-weight: 700; color: var(--ink); }
+.heatmap-index-bar .idx-up   { color: #c0392b; font-weight: 700; }
+.heatmap-index-bar .idx-down { color: #2a78d6; font-weight: 700; }
+.heatmap-index-bar .idx-fx   { color: var(--muted); margin-left: auto; }
 .heatmap-container { flex: 1; position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .heatmap-sector-label {
   position: absolute; top: 0; left: 0; right: 0; height: 20px; font-size: 10.5px; font-weight: 700;
@@ -484,6 +493,7 @@ button.action:disabled { opacity: .5; cursor: default; }
       <span>+5%</span>
     </div>
   </div>
+  <div class="heatmap-index-bar" id="heatmapIndexBar" style="display:none"></div>
   <div class="heatmap-container" id="heatmapContainer">
     <p class="empty" style="padding:12px">Click Refresh to load the KOSPI heatmap.</p>
   </div>
@@ -1040,6 +1050,8 @@ async function toggleNewsCard(idx) {
 // ── KOSPI heatmap ───────────────────────────────────────
 let _heatmapItems = [];
 
+let _usdKrw = null;
+
 async function loadHeatmap() {
   const btn = document.getElementById('heatmapBtn');
   const container = document.getElementById('heatmapContainer');
@@ -1057,7 +1069,8 @@ async function loadHeatmap() {
     _heatmapItems = data.items;
     container.dataset.loaded = '1';
     document.getElementById('heatmapUpdated').textContent =
-      data.updated_at ? `Updated ${data.updated_at.slice(0, 16).replace('T', ' ')}` : '';
+      data.updated_at ? `Updated ${data.updated_at.slice(0, 16).replace('T', ' ')} KST` : '';
+    renderIndexBar(data.index);
     renderHeatmap();
   } catch (e) {
     container.innerHTML = `<div class="error-box"><div><div class="title">Network error</div>Please try again.</div></div>`;
@@ -1065,6 +1078,21 @@ async function loadHeatmap() {
     btn.disabled = false;
     btn.innerHTML = orig;
   }
+}
+
+function renderIndexBar(idx) {
+  const bar = document.getElementById('heatmapIndexBar');
+  if (!idx) { bar.style.display = 'none'; _usdKrw = null; return; }
+  _usdKrw = idx.usd_krw;
+  const up = idx.kospi_change_pct >= 0;
+  const cls = up ? 'idx-up' : 'idx-down';
+  const arrow = up ? '▲' : '▼';
+  bar.innerHTML = `
+    <span class="idx-name">KOSPI</span>
+    <span>${idx.kospi_close.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+    <span class="${cls}">${arrow} ${up ? '+' : ''}${idx.kospi_change_pct.toFixed(2)}% (${up ? '+' : ''}${idx.kospi_change_points.toFixed(2)})</span>
+    <span class="idx-fx">1 USD = ${idx.usd_krw.toLocaleString(undefined, {maximumFractionDigits:2})} KRW</span>`;
+  bar.style.display = 'flex';
 }
 
 // Squarified treemap (Bruls et al.): lays `items` (each needs a numeric
@@ -1217,12 +1245,14 @@ function showHeatmapTip(evt, ticker) {
   const s = _heatmapItems.find(x => x.ticker === ticker);
   if (!s) return;
   const chg = Number(s.change_pct) || 0;
+  const marketCapUsd = _usdKrw ? ` (~$${(s.market_cap / _usdKrw / 1e9).toFixed(2)}B)` : '';
+  const closeUsd = _usdKrw ? ` (~$${(s.close_price / _usdKrw).toFixed(2)})` : '';
   const tip = document.getElementById('heatmapTooltip');
   tip.innerHTML = `<div class="t-name">${s.name_en || s.name}</div>
     <div class="t-row">${s.sector}</div>
     <div class="t-row">Change: ${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>
-    <div class="t-row">Market cap: ${(s.market_cap / 1e12).toFixed(2)}T KRW</div>
-    <div class="t-row">Close: ${s.close_price.toLocaleString()} KRW</div>`;
+    <div class="t-row">Market cap: ${(s.market_cap / 1e12).toFixed(2)}T KRW${marketCapUsd}</div>
+    <div class="t-row">Close: ${s.close_price.toLocaleString()} KRW${closeUsd}</div>`;
   tip.classList.add('show');
   moveHeatmapTip(evt);
 }

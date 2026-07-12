@@ -23,7 +23,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 from app import fetch_kospi_top_stocks, classify_sectors, get_existing_sectors, \
-    save_kospi_snapshot, KOSPI_HEATMAP_TOP_N
+    save_kospi_snapshot, fetch_kospi_index, save_kospi_index_snapshot, KOSPI_HEATMAP_TOP_N
 
 
 def run():
@@ -54,6 +54,14 @@ def run():
         s['sector'] = sectors.get(s['ticker'])
 
     save_kospi_snapshot(stocks)
+
+    try:
+        idx = fetch_kospi_index()
+        save_kospi_index_snapshot(idx)
+        print(f"KOSPI {idx['kospi_close']:.2f} ({idx['kospi_change_pct']:+.2f}%), USD/KRW {idx['usd_krw']:.2f}", flush=True)
+    except Exception as e:
+        print(f'could not fetch/save KOSPI index snapshot: {e}', flush=True)
+
     print('kospi heatmap job done', flush=True)
 
 

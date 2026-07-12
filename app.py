@@ -164,6 +164,16 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS kospi_index_snapshot (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        kospi_close NUMERIC(12,2),
+        kospi_change_pct NUMERIC(6,2),
+        kospi_change_points NUMERIC(10,2),
+        usd_krw NUMERIC(10,2),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK (id = 1)
+    );
+
     """
 
     with get_db() as conn:
@@ -958,6 +968,47 @@ def fetch_kospi_top_stocks(top_n=KOSPI_HEATMAP_TOP_N):
         'industry_hint': r['Industry'] if isinstance(r['Industry'], str) else '',
     } for _, r in top.iterrows()]
 
+def fetch_kospi_index():
+    """Latest KOSPI index level (KS11) and USD/KRW rate - the headline
+    numbers a foreign reader wants before drilling into individual stocks.
+    Same lazy-import rationale as fetch_kospi_top_stocks."""
+    import FinanceDataReader as fdr
+    from datetime import date, timedelta
+    start = date.today() - timedelta(days=10)
+    end = date.today()
+    idx = fdr.DataReader('KS11', start, end)
+    fx = fdr.DataReader('USD/KRW', start, end)
+    last = idx.iloc[-1]
+    return {
+        'kospi_close':         float(last['Close']),
+        'kospi_change_pct':    float(last['Change']) * 100,
+        'kospi_change_points': float(last['Comp']),
+        'usd_krw':             float(fx.iloc[-1]['Close']),
+    }
+
+def save_kospi_index_snapshot(data):
+    sql = """
+        INSERT INTO kospi_index_snapshot (id, kospi_close, kospi_change_pct, kospi_change_points, usd_krw, updated_at)
+        VALUES (1, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET
+            kospi_close = EXCLUDED.kospi_close, kospi_change_pct = EXCLUDED.kospi_change_pct,
+            kospi_change_points = EXCLUDED.kospi_change_points, usd_krw = EXCLUDED.usd_krw,
+            updated_at = CURRENT_TIMESTAMP
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                data['kospi_close'], data['kospi_change_pct'],
+                data['kospi_change_points'], data['usd_krw']
+            ))
+
+def get_kospi_index_snapshot():
+    sql = "SELECT kospi_close, kospi_change_pct, kospi_change_points, usd_krw, updated_at FROM kospi_index_snapshot WHERE id = 1"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchone()
+
 def classify_sectors(stocks):
     """One GPT call classifies every given stock at once. Returns
     {ticker: sector}. Caller should only pass tickers not already
@@ -1350,7 +1401,21 @@ def api_kospi_heatmap():
             'close_price': r['close_price'],
         } for r in rows]
         updated_at = rows[0]['updated_at'].isoformat() if rows else None
-        return jsonify({'items': items, 'updated_at': updated_at})
+
+        idx = None
+        try:
+            idx_row = get_kospi_index_snapshot()
+            if idx_row:
+                idx = {
+                    'kospi_close':         float(idx_row['kospi_close']),
+                    'kospi_change_pct':    float(idx_row['kospi_change_pct']),
+                    'kospi_change_points': float(idx_row['kospi_change_points']),
+                    'usd_krw':             float(idx_row['usd_krw']),
+                }
+        except Exception as e:
+            print(f'get_kospi_index_snapshot failed: {e}', flush=True)
+
+        return jsonify({'items': items, 'updated_at': updated_at, 'index': idx})
     except Exception as e:
         return jsonify({'error': f'Could not load KOSPI heatmap: {e}'}), 500
 
