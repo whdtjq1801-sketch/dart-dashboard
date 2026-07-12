@@ -2,10 +2,15 @@
 
 Fetches each configured YouTube channel's latest uploads (RSS, no API key
 needed), skips videos already in the video_summaries table, and for every
-new video: pulls the Korean transcript, summarizes it with GPT, and stores
-the result. The Flask app's /api/market-issues endpoint only ever reads
-from this table - it never calls YouTube or OpenAI itself - so this job is
-what keeps the tab's content fresh.
+new video: pulls the Korean transcript, summarizes it with GPT (English
+title + English summary + Korean summary, in one call), and stores the
+result. Also backfills title_en/summary_en for any older row that only has
+the Korean fields (from before the English-first switch), by translating
+the stored content instead of re-fetching the transcript.
+
+The Flask app's /api/market-issues endpoint only ever reads from this
+table - it never calls YouTube or OpenAI itself - so this job is what
+keeps the tab's content fresh.
 
 Meant to run on a schedule (Windows Task Scheduler locally, same pattern as
 air_land_daily/daily_scan.py), e.g. once or twice a day:
@@ -16,9 +21,10 @@ Requires the same .env as app.py (DATABASE_URL, OPENAI_API_KEY). Since the
 Flask app is deployed on Railway, DATABASE_URL must point at that same
 Postgres instance for this job's output to show up in the live dashboard.
 """
-import os
 from app import MARKET_CHANNELS, fetch_channel_videos, fetch_video_transcript, \
-    summarize_video_with_gpt, get_db, save_video_summary, MAX_VIDEOS_PER_CHANNEL
+    summarize_video_bilingual, translate_summary_to_english, get_db, \
+    save_video_summary, get_rows_missing_english, update_video_summary_en, \
+    MAX_VIDEOS_PER_CHANNEL
 
 
 def video_exists(video_id):
@@ -29,7 +35,22 @@ def video_exists(video_id):
             return cur.fetchone() is not None
 
 
+def backfill_missing_english():
+    rows = get_rows_missing_english()
+    if not rows:
+        return
+    print(f'{len(rows)} row(s) missing English fields, backfilling', flush=True)
+    for r in rows:
+        try:
+            translated = translate_summary_to_english(r['channel_name'], r['title'], r['summary'])
+            update_video_summary_en(r['video_id'], translated['title_en'], translated['summary_en'])
+        except Exception as e:
+            print(f"backfill failed for {r['video_id']}: {e}", flush=True)
+
+
 def run():
+    backfill_missing_english()
+
     for channel_name, channel_id in MARKET_CHANNELS.items():
         videos = fetch_channel_videos(channel_id, max_results=MAX_VIDEOS_PER_CHANNEL)
         print(f'[{channel_name}] {len(videos)} videos in feed', flush=True)
@@ -39,9 +60,10 @@ def run():
             print(f"[{channel_name}] new video, summarizing: {v['title']}", flush=True)
             try:
                 transcript = fetch_video_transcript(v['video_id'])
-                summary = summarize_video_with_gpt(channel_name, v['title'], transcript)
+                result = summarize_video_bilingual(channel_name, v['title'], transcript)
                 save_video_summary(
-                    v['video_id'], channel_name, v['title'], v['published_at'], summary
+                    v['video_id'], channel_name, v['title'], result['title_en'],
+                    v['published_at'], result['summary_ko'], result['summary_en']
                 )
             except Exception as e:
                 # Leave it out of the table - next run will retry it.

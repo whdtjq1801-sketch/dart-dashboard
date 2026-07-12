@@ -144,10 +144,15 @@ def init_db():
         video_id VARCHAR(20) NOT NULL UNIQUE,
         channel_name VARCHAR(100),
         title VARCHAR(300),
+        title_en VARCHAR(300),
         published_at VARCHAR(40),
         summary TEXT,
+        summary_en TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS title_en VARCHAR(300);
+    ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS summary_en TEXT;
 
     """
 
@@ -293,22 +298,42 @@ def get_cached_video_summary(video_id):
     """A GPT summary for a given video never changes, so once anyone has
     summarized a video we can serve it to everyone else for free instead
     of paying for another OpenAI call."""
-    sql = "SELECT summary FROM video_summaries WHERE video_id = %s"
+    sql = "SELECT title, title_en, summary, summary_en FROM video_summaries WHERE video_id = %s"
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (video_id,))
             row = cur.fetchone()
-    return {'summary': row['summary']} if row else None
+    if not row or not row['summary_en']:
+        return None
+    return {
+        'title':      row['title'],
+        'title_en':   row['title_en'],
+        'summary':    row['summary'],
+        'summary_en': row['summary_en'],
+    }
 
-def save_video_summary(video_id, channel_name, title, published_at, summary):
+def save_video_summary(video_id, channel_name, title, title_en, published_at, summary, summary_en):
     sql = """
-        INSERT INTO video_summaries (video_id, channel_name, title, published_at, summary)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO video_summaries (video_id, channel_name, title, title_en, published_at, summary, summary_en)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (video_id) DO NOTHING
     """
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (video_id, channel_name, title, published_at, summary))
+            cur.execute(sql, (video_id, channel_name, title, title_en, published_at, summary, summary_en))
+
+def get_rows_missing_english():
+    sql = "SELECT video_id, channel_name, title, summary FROM video_summaries WHERE summary_en IS NULL"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchall()
+
+def update_video_summary_en(video_id, title_en, summary_en):
+    sql = "UPDATE video_summaries SET title_en = %s, summary_en = %s WHERE video_id = %s"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (title_en, summary_en, video_id))
 
 
 def download_corp_codes():
@@ -795,28 +820,66 @@ def fetch_video_transcript(video_id, max_chars=6000):
     except Exception:
         return None
 
-def summarize_video_with_gpt(channel_name, title, transcript):
+def summarize_video_bilingual(channel_name, title, transcript):
+    """One GPT call produces an English title + English summary (the app's
+    default reading language) plus a Korean summary (for the language
+    switch), instead of two separate calls. Returns
+    {'title_en', 'summary_en', 'summary_ko'}."""
     rule = (
-        "국내/글로벌 시황에 관심있는 투자자 관점에서 핵심 내용을 한국어로 "
-        "300자 내외로 요약해줘. 다룬 이슈의 핵심 내용, 투자 관점에서 주목할 점, "
-        "불확실하거나 발표자의 추정으로 보이는 부분은 명시해줘."
+        "You are summarizing a Korean economics/current-affairs YouTube video for "
+        "an investor-focused market issues feed. Respond with a single JSON object "
+        'with exactly three keys: "title_en" (a natural English rendering of the '
+        'video title, not a literal word-for-word translation), "summary_en" (an '
+        "English summary, under 120 words, investor's-eye view: core content, "
+        'positive factors, risks, and what to verify next), and "summary_ko" (a '
+        "Korean summary of the same content, around 300 characters, same "
+        "investor's-eye structure). Flag anything uncertain or speculative as such "
+        "in both summaries. Judge the video on its own content, not on short-term "
+        "market moves."
     )
     if transcript:
-        prompt = f"채널: {channel_name}\n제목: {title}\n\n{rule}\n\n[자막 전문]\n{transcript}"
+        prompt = f"Channel: {channel_name}\nTitle: {title}\n\n{rule}\n\n[Transcript]\n{transcript}"
     else:
         prompt = (
-            f"채널: {channel_name}\n제목: {title}\n\n{rule}\n\n"
-            "(이 영상은 자막을 가져올 수 없어 제목만 제공됩니다. 제목만으로 추정한 요약임을 "
-            "밝히고 최대한 짧게 답해줘.)"
+            f"Channel: {channel_name}\nTitle: {title}\n\n{rule}\n\n"
+            "(No transcript is available for this video - only the title. Base the "
+            "summaries on the title alone and note that they're inferred.)"
         )
 
     resp = openai_client.chat.completions.create(
         model='gpt-4o-mini',
+        response_format={'type': 'json_object'},
+        messages=[{'role': 'user', 'content': prompt}],
+        max_tokens=800,
+        temperature=0.3
+    )
+    data = json.loads(resp.choices[0].message.content)
+    return {
+        'title_en':   data.get('title_en') or title,
+        'summary_en': data.get('summary_en', ''),
+        'summary_ko': data.get('summary_ko', ''),
+    }
+
+def translate_summary_to_english(channel_name, title_ko, summary_ko):
+    """Cheap follow-up call for rows that only have the Korean fields (e.g.
+    ingested before the English-first switch) - translates the existing
+    title/summary instead of re-fetching the transcript."""
+    prompt = (
+        f"Channel: {channel_name}\nKorean title: {title_ko}\nKorean summary: {summary_ko}\n\n"
+        'Respond with a JSON object with two keys: "title_en" (a natural English '
+        'rendering of the title, not word-for-word) and "summary_en" (an English '
+        "rendering of the summary, same content and investor's-eye structure, "
+        "under 120 words)."
+    )
+    resp = openai_client.chat.completions.create(
+        model='gpt-4o-mini',
+        response_format={'type': 'json_object'},
         messages=[{'role': 'user', 'content': prompt}],
         max_tokens=500,
         temperature=0.3
     )
-    return resp.choices[0].message.content
+    data = json.loads(resp.choices[0].message.content)
+    return {'title_en': data.get('title_en') or title_ko, 'summary_en': data.get('summary_en', '')}
 
 # ── Flask ──────────────────────────────────────────────
 app = Flask(__name__)
@@ -1025,8 +1088,9 @@ def api_market_issues():
         return jsonify({'error': 'Please sign in with your email first.'}), 401
     try:
         sql = """
-            SELECT video_id, channel_name, title, published_at, summary
+            SELECT video_id, channel_name, title, title_en, published_at, summary, summary_en
             FROM video_summaries
+            WHERE summary_en IS NOT NULL
             ORDER BY published_at DESC
             LIMIT 30
         """
@@ -1038,8 +1102,10 @@ def api_market_issues():
             'video_id':     r['video_id'],
             'channel_name': r['channel_name'],
             'title':        r['title'],
+            'title_en':     r['title_en'],
             'published_at': r['published_at'],
             'summary':      r['summary'],
+            'summary_en':   r['summary_en'],
             'thumbnail':    f"https://i.ytimg.com/vi/{r['video_id']}/mqdefault.jpg",
             'url':          f"https://www.youtube.com/watch?v={r['video_id']}",
         } for r in rows]
@@ -1076,22 +1142,30 @@ def api_market_issues_summarize():
 
     try:
         transcript = fetch_video_transcript(video_id)
-        summary = summarize_video_with_gpt(
+        result = summarize_video_bilingual(
             data.get('channel_name', ''),
             data.get('title', ''),
             transcript
         )
+        title = data.get('title')
         try:
             save_video_summary(
                 video_id,
                 data.get('channel_name'),
-                data.get('title'),
+                title,
+                result['title_en'],
                 data.get('published_at'),
-                summary
+                result['summary_ko'],
+                result['summary_en']
             )
         except Exception as e:
             print(f'save_video_summary failed: {e}', flush=True)
-        return jsonify({'summary': summary})
+        return jsonify({
+            'title':      title,
+            'title_en':   result['title_en'],
+            'summary':    result['summary_ko'],
+            'summary_en': result['summary_en'],
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
