@@ -780,7 +780,10 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
 # channel_name -> YouTube channel ID. Add more channels here later; the
 # RSS feed + transcript flow below works for any of them unchanged.
 MARKET_CHANNELS = {
-    '슈카월드': 'UCsJ6RuBiTVWRX156FVbeaGg',
+    '슈카월드':     'UCsJ6RuBiTVWRX156FVbeaGg',
+    '삼프로TV':     'UChlv4GSd7OQl3js-jkLOnFA',
+    '김작가TV':     'UCvil4OAt-zShzkKHsg9EQAw',
+    '묘수의 관점':  'UCLRXZRRlYr3mLxHlnp5iKMw',
 }
 MAX_VIDEOS_PER_CHANNEL = 10
 

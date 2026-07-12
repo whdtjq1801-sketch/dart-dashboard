@@ -21,6 +21,15 @@ Requires the same .env as app.py (DATABASE_URL, OPENAI_API_KEY). Since the
 Flask app is deployed on Railway, DATABASE_URL must point at that same
 Postgres instance for this job's output to show up in the live dashboard.
 """
+import sys
+# Windows Task Scheduler runs this with the console's legacy codepage
+# (cp949 for Korean Windows), which can't encode every character YouTube
+# titles throw at it (fancy separators, emoji, etc.) - that crashes the
+# whole run on a single print(). Force UTF-8 with lossy fallback instead.
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from app import MARKET_CHANNELS, fetch_channel_videos, fetch_video_transcript, \
     summarize_video_bilingual, translate_summary_to_english, get_db, \
     save_video_summary, get_rows_missing_english, update_video_summary_en, \
