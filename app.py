@@ -569,6 +569,79 @@ def get_disclosures(corp_code, days=1):
     d = r.json()
     return d.get('list', []) if d.get('status') == '000' else []
 
+# Standard DART "key account" names we surface in the financial snapshot,
+# mapped to a plain-English label. DART reports figures in KRW.
+FINANCIAL_ACCOUNTS = {
+    '매출액':              'Revenue',
+    '영업이익':            'Operating Profit',
+    '영업이익(손실)':      'Operating Profit',
+    '당기순이익':          'Net Income',
+    '당기순이익(손실)':    'Net Income',
+    '자산총계':            'Total Assets',
+    '부채총계':            'Total Liabilities',
+    '자본총계':            'Total Equity',
+}
+FINANCIAL_ACCOUNT_ORDER = ['Revenue', 'Operating Profit', 'Net Income', 'Total Assets', 'Total Liabilities', 'Total Equity']
+
+def format_krw(amount_str):
+    """DART amounts come as comma-formatted won strings; render them in a
+    compact trillion/billion/million form that's easier for a reader to
+    scan than a 15-digit number."""
+    try:
+        n = int(str(amount_str).replace(',', ''))
+    except (ValueError, TypeError):
+        return amount_str
+    sign = '-' if n < 0 else ''
+    n = abs(n)
+    if n >= 1_000_000_000_000:
+        return f'{sign}{n / 1_000_000_000_000:.2f}T KRW'
+    if n >= 1_000_000_000:
+        return f'{sign}{n / 1_000_000_000:.2f}B KRW'
+    if n >= 1_000_000:
+        return f'{sign}{n / 1_000_000:.1f}M KRW'
+    return f'{sign}{n:,} KRW'
+
+def fetch_financial_snapshot(corp_code):
+    """DART's key-account API returns the current + prior 2 fiscal years'
+    headline figures in one call. Annual reports (reprt_code 11011) for a
+    given year aren't filed until ~March of the following year, so we try
+    the most recent year first and fall back a year if that one 404s."""
+    current_year = datetime.today().year
+    for year in (current_year - 1, current_year - 2):
+        try:
+            r = http.get('https://opendart.fss.or.kr/api/fnlttSinglAcnt.json',
+                         params={'crtfc_key': DART_API_KEY, 'corp_code': corp_code,
+                                 'bsns_year': str(year), 'reprt_code': '11011'}, timeout=15)
+            d = r.json()
+        except Exception:
+            continue
+        if d.get('status') != '000':
+            continue
+
+        items = d.get('list', [])
+        chosen = [it for it in items if it.get('fs_div') == 'CFS'] or items
+
+        accounts = {}
+        for it in chosen:
+            label = FINANCIAL_ACCOUNTS.get(it.get('account_nm'))
+            if not label or label in accounts:
+                continue
+            accounts[label] = {
+                'current':       format_krw(it.get('thstrm_amount')),
+                'current_period':  it.get('thstrm_nm'),
+                'prior':         format_krw(it.get('frmtrm_amount')),
+                'prior_period':    it.get('frmtrm_nm'),
+                'prior2':        format_krw(it.get('bfefrmtrm_amount')),
+                'prior2_period':   it.get('bfefrmtrm_nm'),
+            }
+        if accounts:
+            return {
+                'fiscal_year': year,
+                'consolidated': bool([it for it in items if it.get('fs_div') == 'CFS']),
+                'accounts': accounts,
+            }
+    return None
+
 def get_stock_price(stock_code):
     """KIS API는 해외 서버에서 접근 제한이 있어 야후 파이낸스로 대체. 코스피(.KS)→코스닥(.KQ) 순으로 시도."""
     if not stock_code:
@@ -745,6 +818,29 @@ def api_del_company(name):
         return jsonify(get_watchlist(email))
     except Exception as e:
         return jsonify({'error': f'Could not update your watchlist: {e}'}), 500
+
+@app.route('/api/companies/<path:name>/financials')
+def api_company_financials(name):
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    if rate_limited(rate_limit_key(), max_calls=20, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
+
+    name_map, _ticker_map = load_corp_codes()
+    corp_code = name_map.get(name)
+    if not corp_code:
+        return jsonify({'error': f'Unknown company "{name}".'}), 404
+
+    try:
+        snapshot = fetch_financial_snapshot(corp_code)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    if not snapshot:
+        return jsonify({'error': 'No financial statement data available for this company yet.'}), 404
+
+    snapshot['account_order'] = FINANCIAL_ACCOUNT_ORDER
+    return jsonify(snapshot)
 
 @app.route('/api/disclosures')
 def api_disclosures():

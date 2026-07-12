@@ -172,6 +172,28 @@ input[type=text]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var
 .co-confirm .yes { background: var(--bad); color: white; }
 .co-confirm .no  { background: var(--card); color: var(--muted); border: 1px solid var(--line); }
 
+.co-item-wrap { display: flex; flex-direction: column; gap: 0; }
+.co-name { cursor: pointer; flex: 1; display: flex; align-items: baseline; gap: 8px; }
+.co-fin-hint { font-size: 10.5px; font-weight: 500; color: var(--muted-soft); }
+.co-name:hover .co-fin-hint { color: var(--primary); }
+
+.fin-panel { display: none; padding: 10px 12px; }
+.fin-panel.open { display: block; }
+.fin-loading, .fin-empty { font-size: 12px; color: var(--muted-soft); padding: 4px 2px; }
+.fin-meta { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.fin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fin-table th {
+  text-align: right; font-weight: 600; color: var(--muted-soft); font-size: 10.5px;
+  padding: 3px 6px; border-bottom: 1px solid var(--line);
+}
+.fin-table th:first-child { text-align: left; }
+.fin-table td {
+  text-align: right; padding: 4px 6px; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line-soft);
+}
+.fin-label { text-align: left !important; color: var(--muted); font-weight: 500; }
+.fin-current { font-weight: 700; color: var(--ink); }
+
 /* ── disclosure list ── */
 .disc-toolbar {
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
@@ -412,12 +434,65 @@ function render_companies(list) {
   const el = document.getElementById('coList');
   if (!list.length) { el.innerHTML = '<p class="empty">No companies yet. Add one above to get started.</p>'; return; }
   el.innerHTML = list.map((n, i) =>
-    `<div class="co-item" id="co-${i}">
-       <span>${n}</span>
-       <button class="co-del" onclick="askDelete(${i}, this)">✕ Remove</button>
+    `<div class="co-item-wrap">
+       <div class="co-item" id="co-${i}">
+         <span class="co-name" onclick="toggleFinancials(${i})">${n} <span class="co-fin-hint">📊 financials</span></span>
+         <button class="co-del" onclick="askDelete(${i}, this)">✕ Remove</button>
+       </div>
+       <div class="fin-panel" id="fin-${i}"></div>
      </div>`
   ).join('');
   window._companies = list;
+}
+
+// ── financial snapshot ─────────────────────────────────
+async function toggleFinancials(i) {
+  const panel = document.getElementById('fin-' + i);
+  const isOpen = panel.classList.contains('open');
+  document.querySelectorAll('.fin-panel.open').forEach(p => p.classList.remove('open'));
+  if (isOpen) return;
+
+  panel.classList.add('open');
+  if (panel.dataset.loaded) return;
+
+  panel.innerHTML = '<div class="fin-loading">Loading financials...</div>';
+  const name = window._companies[i];
+  try {
+    const r = await apiFetch('/api/companies/' + encodeURIComponent(name) + '/financials');
+    if (r.status === 401) { showGate(); return; }
+    const data = await r.json();
+    if (data.error) {
+      panel.innerHTML = `<div class="fin-empty">${data.error}</div>`;
+      return;
+    }
+    panel.innerHTML = renderFinancials(data);
+    panel.dataset.loaded = '1';
+  } catch (e) {
+    panel.innerHTML = '<div class="fin-empty">Could not load financials.</div>';
+  }
+}
+
+function renderFinancials(data) {
+  const a = data.accounts;
+  const rows = data.account_order
+    .filter(label => a[label])
+    .map(label => {
+      const acc = a[label];
+      return `<tr>
+        <td class="fin-label">${label}</td>
+        <td>${acc.prior2 || '—'}</td>
+        <td>${acc.prior || '—'}</td>
+        <td class="fin-current">${acc.current || '—'}</td>
+      </tr>`;
+    }).join('');
+
+  const anyAcc = Object.values(a)[0];
+  return `
+    <div class="fin-meta">FY${data.fiscal_year} ${data.consolidated ? '(Consolidated)' : '(Standalone)'}</div>
+    <table class="fin-table">
+      <thead><tr><th></th><th>${anyAcc.prior2_period || ''}</th><th>${anyAcc.prior_period || ''}</th><th>${anyAcc.current_period || ''}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function askDelete(i, btn) {
