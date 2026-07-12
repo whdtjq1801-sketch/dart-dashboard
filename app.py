@@ -1332,6 +1332,7 @@ def api_kospi_heatmap():
         items = [{
             'ticker':      r['ticker'],
             'name':        r['name'],
+            'name_en':     (_dataset_by_ticker.get(r['ticker']) or {}).get('name_en') or r['name'],
             'sector':      r['sector'],
             'market_cap':  r['market_cap'],
             'change_pct':  float(r['change_pct']) if r['change_pct'] is not None else 0.0,
