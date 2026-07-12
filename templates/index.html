@@ -244,9 +244,41 @@ button.action:disabled { opacity: .5; cursor: default; }
   .tip { margin: 12px 12px 0; }
   .main { padding: 10px; }
 }
+
+/* ── email gate ── */
+.gate-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(20, 23, 31, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.gate-overlay.hidden { display: none; }
+.gate-card {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-md);
+  padding: 28px; width: 100%; max-width: 380px;
+}
+.gate-card h2 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+.gate-card p { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 18px; }
+.gate-card input[type=email] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 14px; outline: none; background: var(--paper); color: var(--ink); margin-bottom: 10px;
+}
+.gate-card input[type=email]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); background: var(--card); }
+.gate-card button.action { width: 100%; padding: 10px; font-size: 13.5px; }
+.gate-error { font-size: 12px; color: var(--bad); margin-top: -4px; margin-bottom: 10px; min-height: 14px; }
 </style>
 </head>
 <body>
+
+<div class="gate-overlay hidden" id="gateOverlay">
+  <div class="gate-card">
+    <h2>👋 Welcome</h2>
+    <p>Enter your email to start your own watchlist. No password, no verification email — just tells us it's you next time.</p>
+    <input type="email" id="gateEmail" placeholder="you@example.com" onkeydown="if(event.key==='Enter')submitGate()">
+    <div class="gate-error" id="gateError"></div>
+    <button class="action btn-blue" onclick="submitGate()">Continue</button>
+  </div>
+</div>
 
 <header>
   <div class="brand">
@@ -323,6 +355,44 @@ button.action:disabled { opacity: .5; cursor: default; }
 </div>
 
 <script>
+// ── user identity + gated fetch ────────────────────────
+function getUserEmail() {
+  return localStorage.getItem('userEmail') || '';
+}
+
+function apiFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers, { 'X-User-Key': getUserEmail() });
+  return fetch(url, options);
+}
+
+function showGate() {
+  document.getElementById('gateOverlay').classList.remove('hidden');
+  document.getElementById('gateEmail').focus();
+}
+
+function submitGate() {
+  const input = document.getElementById('gateEmail');
+  const err = document.getElementById('gateError');
+  const email = input.value.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    err.textContent = 'Please enter a valid email address.';
+    return;
+  }
+  localStorage.setItem('userEmail', email);
+  document.getElementById('gateOverlay').classList.add('hidden');
+  err.textContent = '';
+  loadCompanies();
+}
+
+function initApp() {
+  if (!getUserEmail()) {
+    showGate();
+  } else {
+    loadCompanies();
+  }
+}
+
 // ── tab switch ────────────────────────────────────────
 function showTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -333,7 +403,8 @@ function showTab(name, el) {
 
 // ── companies ─────────────────────────────────────────
 async function loadCompanies() {
-  const r = await fetch('/api/companies');
+  const r = await apiFetch('/api/companies');
+  if (r.status === 401) { showGate(); return; }
   render_companies(await r.json());
 }
 
@@ -360,7 +431,7 @@ function askDelete(i, btn) {
 }
 
 async function confirmDelete(enc) {
-  const r = await fetch('/api/companies/' + enc, {method:'DELETE'});
+  const r = await apiFetch('/api/companies/' + enc, {method:'DELETE'});
   render_companies(await r.json());
 }
 
@@ -466,11 +537,12 @@ async function addCompany() {
   status.textContent = 'Looking up "' + name + '"...';
 
   try {
-    const r = await fetch('/api/companies', {
+    const r = await apiFetch('/api/companies', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({name})
     });
+    if (r.status === 401) { showGate(); return; }
     const res = await r.json();
 
     if (!r.ok || res.error) {
@@ -507,7 +579,8 @@ async function loadDiscs() {
   btn.innerHTML = '⏳ Searching...';
   document.getElementById('discCount').textContent = '';
   try {
-    const r = await fetch('/api/disclosures');
+    const r = await apiFetch('/api/disclosures');
+    if (r.status === 401) { showGate(); return; }
     const data = await r.json();
     if (data.error) {
       document.getElementById('discList').innerHTML =
@@ -552,7 +625,7 @@ async function onDiscClick(idx, el) {
     `<div class="loading-msg"><div class="spin"></div> Summarizing with GPT... <span style="color:var(--muted-soft);font-size:12px">[${d.corp_name}] ${d.report_nm}</span></div>`;
 
   try {
-    const r = await fetch('/api/interpret', {
+    const r = await apiFetch('/api/interpret', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({rcept_no:d.rcept_no, corp_name:d.corp_name, report_nm:d.report_nm, stock_code:d.stock_code})
@@ -586,7 +659,7 @@ async function onDiscClick(idx, el) {
 }
 
 // ── init ──────────────────────────────────────────────
-loadCompanies();
+initApp();
 </script>
 </body>
 </html>

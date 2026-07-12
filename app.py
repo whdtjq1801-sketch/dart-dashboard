@@ -26,9 +26,6 @@ CACHE_MAX_DAYS   = 7
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ── global state ───────────────────────────────────────
-_companies    = []
-
 # ── searchable listed-companies dataset (prebuilt, shipped in the repo) ──
 def load_companies_dataset():
     if not os.path.exists(COMPANIES_DATASET_FILE):
@@ -55,6 +52,17 @@ def get_user_key():
         or request.remote_addr
         or "unknown"
     )
+
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+def require_user_email():
+    """Watchlist endpoints are per-user, identified by the email the frontend
+    sends as X-User-Key. Returns the email, or None if missing/invalid
+    (caller should respond 401)."""
+    email = (request.headers.get("X-User-Key") or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        return None
+    return email
 
 def init_db():
     sql = """
@@ -93,11 +101,53 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS users (
+        user_key VARCHAR(255) PRIMARY KEY,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS watchlist (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(255) NOT NULL,
+        corp_name_kr VARCHAR(200) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_key, corp_name_kr)
+    );
+
     """
 
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
+
+def ensure_user(user_key):
+    sql = "INSERT INTO users (user_key) VALUES (%s) ON CONFLICT (user_key) DO NOTHING"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_key,))
+
+def get_watchlist(user_key):
+    sql = "SELECT corp_name_kr FROM watchlist WHERE user_key = %s ORDER BY created_at"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_key,))
+            return [row['corp_name_kr'] for row in cur.fetchall()]
+
+def add_to_watchlist(user_key, corp_name_kr):
+    sql = """
+        INSERT INTO watchlist (user_key, corp_name_kr)
+        VALUES (%s, %s)
+        ON CONFLICT (user_key, corp_name_kr) DO NOTHING
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_key, corp_name_kr))
+
+def remove_from_watchlist(user_key, corp_name_kr):
+    sql = "DELETE FROM watchlist WHERE user_key = %s AND corp_name_kr = %s"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_key, corp_name_kr))
 
 def save_search_log(keyword):
     sql = """
@@ -548,7 +598,13 @@ def index():
 
 @app.route('/api/companies', methods=['GET'])
 def api_get_companies():
-    return jsonify(_companies)
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    try:
+        return jsonify(get_watchlist(email))
+    except Exception as e:
+        return jsonify({'error': f'Could not load your watchlist: {e}'}), 500
 
 @app.route('/api/companies/search')
 def api_search_companies():
@@ -577,14 +633,19 @@ def api_search_companies():
 
 @app.route('/api/companies', methods=['POST'])
 def api_add_company():
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+
     raw_name = (request.json or {}).get('name', '').strip()
     if not raw_name:
         return jsonify({'error': 'Please enter a company name or ticker.'}), 400
 
     try:
+        ensure_user(email)
         save_search_log(raw_name)
     except Exception as e:
-        print(f'save_search_log failed: {e}', flush=True)
+        print(f'ensure_user/save_search_log failed: {e}', flush=True)
 
     name_map, ticker_map = load_corp_codes()
     stock_cache  = load_json_cache(STOCK_CACHE_FILE)
@@ -606,24 +667,39 @@ def api_add_company():
     save_json_cache(STOCK_CACHE_FILE, stock_cache)
     save_json_cache(ENG_NAME_CACHE_FILE, eng_name_map)
 
-    if matched not in _companies:
-        _companies.append(matched)
+    try:
+        add_to_watchlist(email, matched)
+        companies = get_watchlist(email)
+    except Exception as e:
+        return jsonify({'error': f'Could not save to your watchlist: {e}'}), 500
 
-    return jsonify({'companies': _companies, 'resolved': matched})
+    return jsonify({'companies': companies, 'resolved': matched})
 
 @app.route('/api/companies/<path:name>', methods=['DELETE'])
 def api_del_company(name):
-    if name in _companies:
-        _companies.remove(name)
-    return jsonify(_companies)
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    try:
+        remove_from_watchlist(email, name)
+        return jsonify(get_watchlist(email))
+    except Exception as e:
+        return jsonify({'error': f'Could not update your watchlist: {e}'}), 500
 
 @app.route('/api/disclosures')
 def api_disclosures():
-    if not _companies:
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    try:
+        my_companies = get_watchlist(email)
+    except Exception as e:
+        return jsonify({'error': f'Could not load your watchlist: {e}'}), 500
+    if not my_companies:
         return jsonify([])
     try:
         name_map, _ticker_map = load_corp_codes()
-        idict, sdict = build_interest_dict(name_map, _companies)
+        idict, sdict = build_interest_dict(name_map, my_companies)
         items = []
         for corp_name, corp_code in idict.items():
             stock_code = sdict.get(corp_name)
