@@ -309,6 +309,131 @@ def get_or_fetch_company_info(matched_name, corp_code, stock_cache, eng_name_map
             eng_name_map[info['eng_name'].upper()] = matched_name
     return info
 
+def english_company_name(corp_name_kr):
+    """Best-effort display name for the filings list: DART's official English
+    name from the prebuilt dataset, falling back to the Korean name for
+    unlisted companies the dataset doesn't cover."""
+    c = _dataset_by_kr.get(corp_name_kr)
+    if c and c['name_en']:
+        return c['name_en']
+    return corp_name_kr
+
+# DART report titles are built from a fairly bounded, repetitive vocabulary
+# (report type + an optional parenthetical event). Longest phrases first so
+# multi-word terms get matched before their shorter substrings.
+REPORT_TITLE_DICT = [
+    ('주요사항보고서', 'Material Matters Report'),
+    ('사업보고서', 'Business Report'),
+    ('반기보고서', 'Semiannual Report'),
+    ('분기보고서', 'Quarterly Report'),
+    ('연결감사보고서', 'Consolidated Audit Report'),
+    ('감사보고서', 'Audit Report'),
+    ('증권신고서', 'Securities Registration Statement'),
+    ('투자설명서', 'Prospectus'),
+    ('일괄신고추가서류', 'Shelf Registration Supplement'),
+    ('일괄신고서', 'Shelf Registration Statement'),
+    ('정정신고서', 'Amended Registration Statement'),
+    ('주식등의대량보유상황보고서', 'Report on Substantial Shareholding of Stocks, etc.'),
+    ('임원ㆍ주요주주특정증권등소유상황보고서', "Report on Officers'/Major Shareholders' Ownership of Specific Securities"),
+    ('임원ㆍ주요주주 특정증권등 소유상황보고서', "Report on Officers'/Major Shareholders' Ownership of Specific Securities"),
+    ('기업설명회', 'IR Session'),
+    ('안내공시', 'Guidance Disclosure'),
+    ('자율공시안내', 'Voluntary Disclosure Guidance'),
+    ('개최', 'Held'),
+    ('정기주주총회소집공고', 'Notice of Annual General Meeting'),
+    ('임시주주총회소집공고', 'Notice of Extraordinary General Meeting'),
+    ('주주총회소집결의', "Resolution to Convene Shareholders' Meeting"),
+    ('현금ㆍ현물배당결정', 'Cash/In-kind Dividend Decision'),
+    ('현금배당결정', 'Cash Dividend Decision'),
+    ('무상증자결정', 'Bonus Issue Decision'),
+    ('유상증자결정', 'Rights Offering Decision'),
+    ('유무상증자결정', 'Rights Offering and Bonus Issue Decision'),
+    ('전환사채권발행결정', 'Convertible Bond Issuance Decision'),
+    ('신주인수권부사채권발행결정', 'Bond with Warrant Issuance Decision'),
+    ('교환사채권발행결정', 'Exchangeable Bond Issuance Decision'),
+    ('자기주식취득결정', 'Treasury Stock Acquisition Decision'),
+    ('자기주식처분결정', 'Treasury Stock Disposal Decision'),
+    ('자기주식취득결과보고서', 'Report on Results of Treasury Stock Acquisition'),
+    ('자기주식처분결과보고서', 'Report on Results of Treasury Stock Disposal'),
+    ('자기주식취득신탁계약체결결정', 'Treasury Stock Acquisition Trust Contract Decision'),
+    ('자기주식취득신탁계약해지결정', 'Treasury Stock Acquisition Trust Contract Termination Decision'),
+    ('타법인주식및출자증권양수결정', 'Decision to Acquire Shares/Equity of Another Company'),
+    ('타법인주식및출자증권양도결정', 'Decision to Transfer Shares/Equity of Another Company'),
+    ('영업양수결정', 'Business Acquisition Decision'),
+    ('영업양도결정', 'Business Transfer Decision'),
+    ('합병결정', 'Merger Decision'),
+    ('분할합병결정', 'Split-Merger Decision'),
+    ('분할결정', 'Spin-off Decision'),
+    ('주식교환ㆍ이전결정', 'Share Exchange/Transfer Decision'),
+    ('해산사유발생', 'Dissolution Event'),
+    ('부도발생', 'Default Event'),
+    ('은행거래정지', 'Bank Transaction Suspension'),
+    ('영업정지', 'Business Suspension'),
+    ('회생절차개시신청', 'Rehabilitation Proceedings Filed'),
+    ('파산신청', 'Bankruptcy Filing'),
+    ('소송등의제기', 'Litigation Filed'),
+    ('자산재평가실시결정', 'Asset Revaluation Decision'),
+    ('채권은행등의관리절차개시', 'Creditor Bank Management Procedure Initiated'),
+    ('채권은행등의관리절차중단', 'Creditor Bank Management Procedure Terminated'),
+    ('매출액또는손익구조', 'Change in Sales or Profit/Loss Structure'),
+    ('최대주주변경', 'Change of Largest Shareholder'),
+    ('최대주주등소유주식변동신고서', "Report on Changes in Largest Shareholder's Holdings"),
+    ('대표이사변경', 'CEO Change'),
+    ('결정', 'Decision'),
+    ('공고', 'Notice'),
+    ('신고서', 'Registration Statement'),
+    ('보고서', 'Report'),
+    ('정정', 'Amendment'),
+    ('첨부정정', 'Attachment Amendment'),
+    ('기재정정', 'Content Correction'),
+    ('자율공시', 'Voluntary Disclosure'),
+    ('일반', 'General'),
+    ('약식', 'Abbreviated'),
+    ('기타', 'Other'),
+    # common [bracket] prefixes DART puts in front of a title
+    ('기재정정', 'Content Correction'),
+    ('첨부추가', 'Attachment Added'),
+    ('첨부정정', 'Attachment Correction'),
+    ('발행조건확정', 'Issuance Terms Finalized'),
+    ('제출연기', 'Filing Deferred'),
+    ('자율공시', 'Voluntary Disclosure'),
+    ('공정공시', 'Fair Disclosure'),
+    ('연장', 'Extended'),
+    ('정정신고(발행조건확정)', 'Amended Filing (Issuance Terms Finalized)'),
+    ('해외증권예탁증권관련', 'Related to Overseas Depositary Receipts'),
+    ('효력발생안내', 'Effectiveness Notice'),
+    ('특정증권등의소유상황보고서', 'Report on Ownership of Specific Securities'),
+    ('연결재무제표기준영업(잠정)실적', '(Preliminary) Consolidated Operating Results'),
+    ('영업(잠정)실적', '(Preliminary) Operating Results'),
+]
+
+KOREAN_CHAR_RE = re.compile(r'[가-힣]')
+
+def _translate_segment(segment):
+    """Translate one title segment (the base title, or one parenthetical part).
+    Only returns a translation if it fully covers the segment - a half-translated
+    mix of Korean and English (e.g. '자기주식처분결과Report') is worse than
+    leaving the whole segment in Korean, so we discard partial matches."""
+    result = segment
+    for kr, en in REPORT_TITLE_DICT:
+        if kr in result:
+            result = result.replace(kr, en)
+    return result if not KOREAN_CHAR_RE.search(result) else segment
+
+def translate_report_title(korean_title):
+    """Best-effort English rendering of a DART report title, segment by segment
+    (base title, then each (parenthetical) or [bracketed] part) so an
+    unrecognized compound term doesn't get chopped into a garbled Korean/
+    English mix."""
+    parts = re.split(r'(\([^()]*\)|\[[^\[\]]*\])', korean_title)
+    translated = []
+    for part in parts:
+        if (part.startswith('(') and part.endswith(')')) or (part.startswith('[') and part.endswith(']')):
+            translated.append(part[0] + _translate_segment(part[1:-1]) + part[-1])
+        else:
+            translated.append(_translate_segment(part))
+    return ''.join(translated)
+
 def build_interest_dict(corp_map, names):
     stock_cache   = load_json_cache(STOCK_CACHE_FILE)
     eng_name_map  = load_json_cache(ENG_NAME_CACHE_FILE)
@@ -502,13 +627,16 @@ def api_disclosures():
         items = []
         for corp_name, corp_code in idict.items():
             stock_code = sdict.get(corp_name)
+            display_name = english_company_name(corp_name)
             for d in get_disclosures(corp_code, days=90)[:15]:
                 items.append({
-                    'corp_name':  corp_name,
-                    'stock_code': stock_code,
-                    'rcept_no':   d['rcept_no'],
-                    'report_nm':  d['report_nm'],
-                    'rcept_dt':   d['rcept_dt'],
+                    'corp_name':     display_name,
+                    'corp_name_kr':  corp_name,
+                    'stock_code':    stock_code,
+                    'rcept_no':      d['rcept_no'],
+                    'report_nm':     translate_report_title(d['report_nm']),
+                    'report_nm_kr':  d['report_nm'],
+                    'rcept_dt':      d['rcept_dt'],
                 })
         items.sort(key=lambda x: x['rcept_dt'], reverse=True)
         return jsonify(items)

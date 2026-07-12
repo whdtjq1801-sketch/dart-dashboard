@@ -536,7 +536,7 @@ function render_discs(list) {
   const el = document.getElementById('discList');
   if (!list.length) { el.innerHTML = '<p class="empty" style="padding:12px">No filings in the last 90 days</p>'; return; }
   el.innerHTML = list.map((d, i) =>
-    `<div class="disc-item" id="di${i}" onclick="onDiscClick(${i},this)">
+    `<div class="disc-item" id="di${i}" onclick="onDiscClick(${i},this)" title="${d.corp_name_kr} — ${d.report_nm_kr}">
        <div><span class="disc-corp">[${d.corp_name}]</span> ${d.report_nm}</div>
        <div class="disc-date">${d.rcept_dt}</div>
      </div>`
