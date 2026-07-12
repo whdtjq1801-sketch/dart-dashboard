@@ -5,3 +5,4 @@ python-dotenv
 gunicorn
 yfinance
 psycopg2-binary
+youtube-transcript-api

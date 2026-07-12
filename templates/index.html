@@ -328,6 +328,7 @@ button.action:disabled { opacity: .5; cursor: default; }
     <div class="tabs">
       <div class="tab active" onclick="showTab('companies',this)">Watchlist</div>
       <div class="tab" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
+      <div class="tab" onclick="showTab('market',this)">시황 <span class="badge" id="marketBadge" style="display:none">0</span></div>
     </div>
 
     <!-- Watchlist tab -->
@@ -359,6 +360,17 @@ button.action:disabled { opacity: .5; cursor: default; }
       </div>
       <div class="disc-list" id="discList">
         <p class="empty" style="padding:12px">Add a company, then click "Search filings".</p>
+      </div>
+    </div>
+
+    <!-- Market issues tab -->
+    <div class="tab-body" id="tab-market">
+      <div class="disc-toolbar">
+        <button class="action btn-blue" onclick="loadMarketIssues()" id="marketBtn">🔄 새로고침</button>
+        <span class="disc-count" id="marketCount"></span>
+      </div>
+      <div class="disc-list" id="marketList">
+        <p class="empty" style="padding:12px">버튼을 눌러 최신 영상을 불러오세요.</p>
       </div>
     </div>
   </div>
@@ -421,6 +433,9 @@ function showTab(name, el) {
   document.querySelectorAll('.tab-body').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'market' && !document.getElementById('marketList').dataset.loaded) {
+    loadMarketIssues();
+  }
 }
 
 // ── companies ─────────────────────────────────────────
@@ -730,6 +745,101 @@ async function onDiscClick(idx, el) {
   } catch(e) {
     document.getElementById('gptBody').innerHTML =
       `<div class="error-box"><div><div class="title">Something went wrong</div>Please try selecting the filing again.</div></div>`;
+  }
+}
+
+// ── market issues (YouTube summaries) ──────────────────
+let _marketItems = [];
+
+async function loadMarketIssues() {
+  const btn = document.getElementById('marketBtn');
+  const list = document.getElementById('marketList');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ 불러오는 중...';
+  document.getElementById('marketCount').textContent = '';
+  try {
+    const r = await apiFetch('/api/market-issues');
+    if (r.status === 401) { showGate(); return; }
+    const data = await r.json();
+    if (data.error) {
+      list.innerHTML = `<div class="error-box"><div><div class="title">불러오기 실패</div>${data.error}</div></div>`;
+      return;
+    }
+    _marketItems = data;
+    render_market(data);
+    list.dataset.loaded = '1';
+    document.getElementById('marketCount').textContent = `${data.length}개 영상`;
+    const badge = document.getElementById('marketBadge');
+    badge.textContent = data.length;
+    badge.style.display = data.length ? 'inline-block' : 'none';
+  } catch (e) {
+    list.innerHTML = `<div class="error-box"><div><div class="title">네트워크 오류</div>다시 시도해주세요.</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
+function render_market(list) {
+  const el = document.getElementById('marketList');
+  if (!list.length) { el.innerHTML = '<p class="empty" style="padding:12px">아직 정리된 영상이 없습니다. 배치 작업이 실행되면 채워집니다.</p>'; return; }
+  el.innerHTML = list.map((v, i) =>
+    `<div class="disc-item" id="mi${i}" onclick="onMarketClick(${i},this)">
+       <div><span class="disc-corp">[${v.channel_name}]</span> ${v.title}</div>
+       <div class="disc-date">${(v.published_at || '').slice(0, 10)}</div>
+     </div>`
+  ).join('');
+}
+
+function renderMarketSummary(v, summary) {
+  document.getElementById('gptBody').innerHTML =
+    `<div class="gpt-corp">[${v.channel_name}] ${v.title}</div>
+     <div class="gpt-date">게시일: ${(v.published_at || '').slice(0, 10)}</div>
+     <hr class="gpt-divider">
+     <div class="gpt-text">${summary}</div>
+     <div class="action-row">
+       <a class="dart-link" href="${v.url}" target="_blank">▶ 유튜브에서 보기</a>
+     </div>`;
+}
+
+async function onMarketClick(idx, el) {
+  document.querySelectorAll('.disc-item').forEach(e => e.classList.remove('sel'));
+  el.classList.add('sel');
+  const v = _marketItems[idx];
+
+  // Normal path: the batch job already pre-computed this, so it's just a
+  // render - no network call needed.
+  if (v.summary) {
+    renderMarketSummary(v, v.summary);
+    return;
+  }
+
+  // Fallback: video hasn't been picked up by the batch job yet.
+  document.getElementById('gptBody').innerHTML =
+    `<div class="loading-msg"><div class="spin"></div> GPT로 요약 중... <span style="color:var(--muted-soft);font-size:12px">[${v.channel_name}] ${v.title}</span></div>`;
+
+  try {
+    const r = await apiFetch('/api/market-issues/summarize', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        video_id: v.video_id, title: v.title,
+        channel_name: v.channel_name, published_at: v.published_at
+      })
+    });
+    if (r.status === 401) { showGate(); return; }
+    const res = await r.json();
+    if (res.error) {
+      document.getElementById('gptBody').innerHTML =
+        `<div class="error-box"><div><div class="title">요약 생성 실패</div>${res.error}</div></div>`;
+      return;
+    }
+    v.summary = res.summary;
+    renderMarketSummary(v, res.summary);
+  } catch (e) {
+    document.getElementById('gptBody').innerHTML =
+      `<div class="error-box"><div><div class="title">Something went wrong</div>다시 시도해주세요.</div></div>`;
   }
 }
 

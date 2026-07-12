@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request, render_template
 import requests as http
 import yfinance as yf
 from openai import OpenAI
+from youtube_transcript_api import YouTubeTranscriptApi
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -136,6 +137,16 @@ def init_db():
         corp_name_kr VARCHAR(200) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (user_key, corp_name_kr)
+    );
+
+    CREATE TABLE IF NOT EXISTS video_summaries (
+        id BIGSERIAL PRIMARY KEY,
+        video_id VARCHAR(20) NOT NULL UNIQUE,
+        channel_name VARCHAR(100),
+        title VARCHAR(300),
+        published_at VARCHAR(40),
+        summary TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     """
@@ -276,6 +287,28 @@ def get_cached_interpretation(rcept_no):
             'volume_str': f'{volume:,} shares',
         }
     return {'summary': row['summary'], 'price_info': price_info}
+
+
+def get_cached_video_summary(video_id):
+    """A GPT summary for a given video never changes, so once anyone has
+    summarized a video we can serve it to everyone else for free instead
+    of paying for another OpenAI call."""
+    sql = "SELECT summary FROM video_summaries WHERE video_id = %s"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (video_id,))
+            row = cur.fetchone()
+    return {'summary': row['summary']} if row else None
+
+def save_video_summary(video_id, channel_name, title, published_at, summary):
+    sql = """
+        INSERT INTO video_summaries (video_id, channel_name, title, published_at, summary)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (video_id) DO NOTHING
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (video_id, channel_name, title, published_at, summary))
 
 
 def download_corp_codes():
@@ -718,6 +751,73 @@ def interpret_with_gpt(corp_name, report_name, content, price_info=None):
     )
     return resp.choices[0].message.content
 
+# ── domestic market issues (YouTube channel summaries) ──
+# channel_name -> YouTube channel ID. Add more channels here later; the
+# RSS feed + transcript flow below works for any of them unchanged.
+MARKET_CHANNELS = {
+    '슈카월드': 'UCsJ6RuBiTVWRX156FVbeaGg',
+}
+MAX_VIDEOS_PER_CHANNEL = 10
+
+YT_FEED_NS = {
+    'atom': 'http://www.w3.org/2005/Atom',
+    'yt':   'http://www.youtube.com/xml/schemas/2015',
+}
+
+def fetch_channel_videos(channel_id, max_results=10):
+    """Latest uploads for a channel via YouTube's public RSS feed - no API
+    key or quota needed, unlike the YouTube Data API."""
+    r = http.get('https://www.youtube.com/feeds/videos.xml',
+                 params={'channel_id': channel_id}, timeout=10)
+    root = ET.fromstring(r.content)
+    videos = []
+    for entry in root.findall('atom:entry', YT_FEED_NS)[:max_results]:
+        video_id = entry.findtext('yt:videoId', namespaces=YT_FEED_NS)
+        if not video_id:
+            continue
+        videos.append({
+            'video_id':     video_id,
+            'title':        entry.findtext('atom:title', namespaces=YT_FEED_NS),
+            'published_at': entry.findtext('atom:published', namespaces=YT_FEED_NS),
+            'thumbnail':    f'https://i.ytimg.com/vi/{video_id}/mqdefault.jpg',
+            'url':          f'https://www.youtube.com/watch?v={video_id}',
+        })
+    return videos
+
+def fetch_video_transcript(video_id, max_chars=6000):
+    """Korean (falling back to English) transcript text, or None if the
+    video has no captions available - the GPT summary falls back to the
+    title alone in that case."""
+    try:
+        transcript = YouTubeTranscriptApi().fetch(video_id, languages=['ko', 'en'])
+        text = ' '.join(seg['text'] for seg in transcript.to_raw_data())
+        return text[:max_chars] if text.strip() else None
+    except Exception:
+        return None
+
+def summarize_video_with_gpt(channel_name, title, transcript):
+    rule = (
+        "국내/글로벌 시황에 관심있는 투자자 관점에서 핵심 내용을 한국어로 "
+        "300자 내외로 요약해줘. 다룬 이슈의 핵심 내용, 투자 관점에서 주목할 점, "
+        "불확실하거나 발표자의 추정으로 보이는 부분은 명시해줘."
+    )
+    if transcript:
+        prompt = f"채널: {channel_name}\n제목: {title}\n\n{rule}\n\n[자막 전문]\n{transcript}"
+    else:
+        prompt = (
+            f"채널: {channel_name}\n제목: {title}\n\n{rule}\n\n"
+            "(이 영상은 자막을 가져올 수 없어 제목만 제공됩니다. 제목만으로 추정한 요약임을 "
+            "밝히고 최대한 짧게 답해줘.)"
+        )
+
+    resp = openai_client.chat.completions.create(
+        model='gpt-4o-mini',
+        messages=[{'role': 'user', 'content': prompt}],
+        max_tokens=500,
+        temperature=0.3
+    )
+    return resp.choices[0].message.content
+
 # ── Flask ──────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -911,6 +1011,87 @@ def api_interpret():
             print(f'save_interpretation failed: {e}', flush=True)
 
         return jsonify({'summary': summary, 'price_info': price_info})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/market-issues')
+def api_market_issues():
+    """Reads the pre-ingested video+summary catalog straight from Postgres -
+    no live YouTube/OpenAI calls here. A scheduled batch job
+    (market_issues_job.py) is what keeps this table filled; see its
+    docstring for how it's meant to be run."""
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+    try:
+        sql = """
+            SELECT video_id, channel_name, title, published_at, summary
+            FROM video_summaries
+            ORDER BY published_at DESC
+            LIMIT 30
+        """
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+        items = [{
+            'video_id':     r['video_id'],
+            'channel_name': r['channel_name'],
+            'title':        r['title'],
+            'published_at': r['published_at'],
+            'summary':      r['summary'],
+            'thumbnail':    f"https://i.ytimg.com/vi/{r['video_id']}/mqdefault.jpg",
+            'url':          f"https://www.youtube.com/watch?v={r['video_id']}",
+        } for r in rows]
+        return jsonify(items)
+    except Exception as e:
+        return jsonify({'error': f'Could not load market issues: {e}'}), 500
+
+@app.route('/api/market-issues/summarize', methods=['POST'])
+def api_market_issues_summarize():
+    """Fallback only: the batch job normally pre-generates every summary,
+    so the frontend serves `summary` straight from /api/market-issues and
+    never calls this in the common case. This exists for a video the job
+    hasn't gotten to yet (e.g. published since the last run)."""
+    email = require_user_email()
+    if not email:
+        return jsonify({'error': 'Please sign in with your email first.'}), 401
+
+    data = request.json or {}
+    video_id = data.get('video_id')
+    if not video_id:
+        return jsonify({'error': 'Missing video_id.'}), 400
+
+    try:
+        cached = get_cached_video_summary(video_id)
+    except Exception as e:
+        print(f'get_cached_video_summary failed: {e}', flush=True)
+        cached = None
+    if cached:
+        return jsonify(cached)
+
+    # Only rate-limit the expensive path (transcript fetch + OpenAI call).
+    if rate_limited(rate_limit_key(), max_calls=10, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
+
+    try:
+        transcript = fetch_video_transcript(video_id)
+        summary = summarize_video_with_gpt(
+            data.get('channel_name', ''),
+            data.get('title', ''),
+            transcript
+        )
+        try:
+            save_video_summary(
+                video_id,
+                data.get('channel_name'),
+                data.get('title'),
+                data.get('published_at'),
+                summary
+            )
+        except Exception as e:
+            print(f'save_video_summary failed: {e}', flush=True)
+        return jsonify({'summary': summary})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
