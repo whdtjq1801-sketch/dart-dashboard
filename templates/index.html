@@ -1200,6 +1200,50 @@ function shortDisplayName(name) {
   return s || name;
 }
 
+// Measures actual rendered text width (canvas) rather than guessing from
+// character count - a character-count heuristic was still letting long
+// words like "Innotek" overflow the 2-line clamp into an ellipsis.
+let _measureCtx = null;
+function textWidthPx(text, fontPx) {
+  if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+  _measureCtx.font = `700 ${fontPx}px -apple-system, "Segoe UI", "Inter", sans-serif`;
+  return _measureCtx.measureText(text).width;
+}
+
+// Greedy word-wrap simulation (same rule the browser uses) to check whether
+// `text` actually wraps into <= maxLines at lineWidthPx - checking total
+// width against lineWidthPx*maxLines is not equivalent, since a single long
+// second word can overflow its line even when the combined total fits.
+function fitsInLines(text, fontPx, maxLines, lineWidthPx) {
+  const words = text.split(' ');
+  let lines = 1, current = '';
+  for (const word of words) {
+    const test = current ? current + ' ' + word : word;
+    if (textWidthPx(test, fontPx) <= lineWidthPx) {
+      current = test;
+      continue;
+    }
+    if (textWidthPx(word, fontPx) > lineWidthPx) return false; // word alone can't fit any line
+    lines++;
+    if (lines > maxLines) return false;
+    current = word;
+  }
+  return true;
+}
+
+// Picks the most detail that actually fits: full short name if it'll wrap
+// into 2 lines at this font size, else just the first word, else the
+// ticker - a truncated word fragment ("Hd Hyun...") is worse than a clean
+// shorter label the reader can still tap/hover for full detail on.
+function cellLabel(name, ticker, w, fontPx) {
+  const full = shortDisplayName(name);
+  const lineWidth = Math.max(0, w - 6);
+  if (fitsInLines(full, fontPx, 2, lineWidth)) return full;
+  const firstWord = full.split(' ')[0];
+  if (textWidthPx(firstWord, fontPx) <= lineWidth) return firstWord;
+  return ticker;
+}
+
 const SECTOR_HEADER_H = 20;
 
 function renderHeatmap() {
@@ -1239,10 +1283,11 @@ function renderHeatmap() {
       const showText = cr.w > 32 && cr.h > 22;
       // Scale font down for small cells so short-form names fit two lines
       // instead of being ellipsis-truncated to nothing useful.
-      const fontPx = Math.max(9, Math.min(13, Math.round(Math.min(cr.w / 7, cr.h / 3))));
+      const fontPx = Math.max(8, Math.min(13, Math.round(Math.min(cr.w / 7, cr.h / 3))));
+      const label = showText ? cellLabel(s.name_en || s.name, s.ticker, cr.w, fontPx) : '';
       html += `<div class="heatmap-cell" style="left:${cr.x}px;top:${cr.y}px;width:${cr.w}px;height:${cr.h}px;background:${bg};color:${fg};font-size:${fontPx}px"
         onmouseenter="showHeatmapTip(event,'${s.ticker}')" onmousemove="moveHeatmapTip(event)" onmouseleave="hideHeatmapTip()">
-        ${showText ? `<div class="name">${shortDisplayName(s.name_en || s.name)}</div><div class="chg">${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>` : ''}
+        ${showText ? `<div class="name">${label}</div><div class="chg">${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>` : ''}
       </div>`;
     }
   }
@@ -1266,8 +1311,17 @@ function showHeatmapTip(evt, ticker) {
 }
 function moveHeatmapTip(evt) {
   const tip = document.getElementById('heatmapTooltip');
-  tip.style.left = (evt.clientX + 14) + 'px';
-  tip.style.top = (evt.clientY + 14) + 'px';
+  const margin = 10;
+  const tipW = tip.offsetWidth || 220;
+  const tipH = tip.offsetHeight || 100;
+  let left = evt.clientX + 14;
+  let top = evt.clientY + 14;
+  if (left + tipW > window.innerWidth - margin) left = evt.clientX - tipW - 14;
+  if (left < margin) left = margin;
+  if (top + tipH > window.innerHeight - margin) top = evt.clientY - tipH - 14;
+  if (top < margin) top = margin;
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
 }
 function hideHeatmapTip() {
   document.getElementById('heatmapTooltip').classList.remove('show');
