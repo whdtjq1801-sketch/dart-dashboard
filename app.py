@@ -1090,12 +1090,18 @@ def api_market_issues():
     if not email:
         return jsonify({'error': 'Please sign in with your email first.'}), 401
     try:
+        # A plain "most recent 30 overall" would let a high-frequency channel
+        # (multiple uploads/day) crowd out a low-frequency one entirely,
+        # so cap it per channel instead and merge by date for display.
         sql = """
             SELECT video_id, channel_name, title, title_en, published_at, summary, summary_en
-            FROM video_summaries
-            WHERE summary_en IS NOT NULL
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY channel_name ORDER BY published_at DESC) AS rn
+                FROM video_summaries
+                WHERE summary_en IS NOT NULL
+            ) ranked
+            WHERE rn <= 8
             ORDER BY published_at DESC
-            LIMIT 30
         """
         with get_db() as conn:
             with conn.cursor() as cur:
