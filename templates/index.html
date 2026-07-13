@@ -406,14 +406,8 @@ button.action:disabled { opacity: .5; cursor: default; }
 
 <div class="tip" id="tip">
   <div style="font-size:16px;line-height:1.3">👋</div>
-  <div style="flex:1">
-    <div style="font-weight:700">How it works</div>
-    <div class="steps">
-      <div class="step" id="step1"><b>1</b> Add companies to your watchlist</div>
-      <div class="step" id="step2"><b>2</b> Click a filing to read the AI summary</div>
-    </div>
-  </div>
-  <button class="tip-close" onclick="document.getElementById('tip').classList.add('hidden')">✕</button>
+  <div style="flex:1" id="tipContent"></div>
+  <button class="tip-close" onclick="dismissTip()">✕</button>
 </div>
 
 <div class="tabs-bar">
@@ -541,6 +535,7 @@ function submitGate() {
 }
 
 function initApp() {
+  updateTipForTab('market');
   if (!getUserEmail()) {
     showGate();
   } else {
@@ -549,10 +544,64 @@ function initApp() {
   }
 }
 
+// ── contextual "how it works" tip, per tab ─────────────
+const TIP_CONTENT = {
+  market: {
+    title: 'Market News',
+    steps: [
+      'AI-translated summaries of Korean finance YouTube channels (슈카월드, 삼프로TV, 김작가TV, 묘수의 관점)',
+      'Switch EN/KO with the toggle · tap a card to read the full summary',
+    ],
+  },
+  heatmap: {
+    title: 'KOSPI Heatmap',
+    steps: [
+      'Top 80 KOSPI stocks by market cap, grouped by sector',
+      'Box size = market cap · color = today\'s % change (red = up, blue = down) · tap a box for details',
+    ],
+  },
+  dart: {
+    title: 'How it works',
+    steps: [
+      'Add companies to your watchlist',
+      'Click a filing to read the AI summary',
+    ],
+  },
+};
+
+function tipGroupFor(name) {
+  return name === 'market' ? 'market' : name === 'heatmap' ? 'heatmap' : 'dart';
+}
+
+function updateTipForTab(name) {
+  const group = tipGroupFor(name);
+  const tip = document.getElementById('tip');
+  tip.dataset.group = group;
+  if (localStorage.getItem('tipDismissed_' + group)) {
+    tip.classList.add('hidden');
+    return;
+  }
+  tip.classList.remove('hidden');
+  const c = TIP_CONTENT[group];
+  document.getElementById('tipContent').innerHTML =
+    `<div style="font-weight:700">${c.title}</div>
+     <div class="steps">${c.steps.map((s, i) => {
+       const id = (group === 'dart' && i === 0) ? ' id="step1"' : '';
+       return `<div class="step"${id}><b>${i + 1}</b> ${s}</div>`;
+     }).join('')}</div>`;
+}
+
+function dismissTip() {
+  const tip = document.getElementById('tip');
+  localStorage.setItem('tipDismissed_' + tip.dataset.group, '1');
+  tip.classList.add('hidden');
+}
+
 // ── tab switch ────────────────────────────────────────
 function showTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
+  updateTipForTab(name);
 
   const mainSplit    = document.getElementById('mainSplit');
   const marketFeed    = document.getElementById('marketFeedWrap');
@@ -784,7 +833,7 @@ async function addCompany() {
     status.className = 'add-status ok';
     status.textContent = res.resolved === name ? `Added ${res.resolved}` : `Matched "${name}" → ${res.resolved}`;
     inp.value = '';
-    document.getElementById('step1').classList.add('done');
+    document.getElementById('step1')?.classList.add('done');
   } catch (e) {
     status.className = 'add-status err';
     status.textContent = 'Network error. Please try again.';
