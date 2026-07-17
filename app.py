@@ -174,6 +174,14 @@ def init_db():
         CHECK (id = 1)
     );
 
+    CREATE TABLE IF NOT EXISTS site_feedback (
+        id BIGSERIAL PRIMARY KEY,
+        user_key VARCHAR(255),
+        message TEXT NOT NULL,
+        ip_address VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     """
 
     with get_db() as conn:
@@ -208,6 +216,19 @@ def remove_from_watchlist(user_key, corp_name_kr):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (user_key, corp_name_kr))
+
+def save_feedback(message):
+    sql = """
+        INSERT INTO site_feedback (user_key, message, ip_address)
+        VALUES (%s, %s, %s)
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                (request.headers.get("X-User-Key") or "").strip().lower() or None,
+                message,
+                request.remote_addr,
+            ))
 
 def save_search_log(keyword):
     sql = """
@@ -1419,6 +1440,26 @@ def api_kospi_heatmap():
         return jsonify({'items': items, 'updated_at': updated_at, 'index': idx})
     except Exception as e:
         return jsonify({'error': f'Could not load KOSPI heatmap: {e}'}), 500
+
+@app.route('/api/feedback', methods=['POST'])
+def api_feedback():
+    """No login required - the About tab is meant to be shown to anyone
+    (prospective users, not just signed-in ones), so this stays open, just
+    rate-limited against spam."""
+    if rate_limited(rate_limit_key(), max_calls=5, window_sec=60):
+        return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
+
+    message = ((request.json or {}).get('message') or '').strip()
+    if not message:
+        return jsonify({'error': 'Please write a message first.'}), 400
+    if len(message) > 4000:
+        message = message[:4000]
+
+    try:
+        save_feedback(message)
+    except Exception as e:
+        return jsonify({'error': f'Could not save feedback: {e}'}), 500
+    return jsonify({'ok': True})
 
 try:
     init_db()
