@@ -273,10 +273,17 @@ button.action:disabled { opacity: .5; cursor: default; }
 .news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 760px; padding-bottom: 24px; min-width: 0; }
 
 /* ── market sentiment panel ── */
-.news-side-col { flex: 1 1 300px; max-width: 620px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
 .sentiment-panel {
-  flex: none; background: var(--card); border: 1px solid var(--line);
+  flex: 0 0 320px; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 18px;
+}
+
+/* Trending Topics - its own full-width band below the feed/sentiment row,
+   not squeezed into the sidebar. */
+.topics-section {
+  flex: 0 0 auto; margin-top: 16px; max-height: 190px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm); padding: 18px;
 }
 .sentiment-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
 .sentiment-panel-sub { font-size: 11.5px; color: var(--muted-soft); margin-bottom: 16px; }
@@ -428,8 +435,8 @@ button.action:disabled { opacity: .5; cursor: default; }
 
   .news-body-row { flex-direction: column; }
   .news-list { max-width: none; }
-  .news-side-col { flex: 0 0 auto; }
-  .sentiment-panel { max-height: 260px; }
+  .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
+  .topics-section { max-height: none; }
 }
 
 /* ── email gate ── */
@@ -558,18 +565,16 @@ button.action:disabled { opacity: .5; cursor: default; }
     <div class="news-list" id="marketList">
       <p class="empty" style="padding:12px">Click Refresh to load the latest videos.</p>
     </div>
-    <div class="news-side-col">
-      <div class="sentiment-panel" id="sentimentPanel">
-        <div class="sentiment-panel-title">Market Sentiment</div>
-        <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
-        <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
-      </div>
-      <div class="sentiment-panel" id="topicsPanel">
-        <div class="sentiment-panel-title">Trending Topics</div>
-        <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags</div>
-        <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
-      </div>
+    <div class="sentiment-panel" id="sentimentPanel">
+      <div class="sentiment-panel-title">Market Sentiment</div>
+      <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
+      <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
     </div>
+  </div>
+  <div class="topics-section" id="topicsSection">
+    <div class="sentiment-panel-title">Trending Topics</div>
+    <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags across all videos</div>
+    <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
   </div>
 </div>
 
