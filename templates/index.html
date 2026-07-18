@@ -202,6 +202,12 @@ input[type=text]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
   padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--paper);
 }
+.watchlist-divider {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 20px 0 10px; padding-top: 16px; border-top: 1px solid var(--line);
+}
+.watchlist-divider span { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.watchlist-divider button.action { padding: 5px 12px; font-size: 11.5px; }
 button.action {
   padding: 8px 16px; border: none; border-radius: var(--radius-sm); cursor: pointer;
   font-size: 12.5px; font-weight: 700; transition: filter .15s, transform .1s;
@@ -492,8 +498,7 @@ button.action:disabled { opacity: .5; cursor: default; }
   <div class="tabs">
     <div class="tab active" id="tabBtn-market" onclick="showTab('market',this)">Market News <span class="badge" id="marketBadge" style="display:none">0</span></div>
     <div class="tab" id="tabBtn-heatmap" onclick="showTab('heatmap',this)">Heatmap</div>
-    <div class="tab" id="tabBtn-companies" onclick="showTab('companies',this)">Watchlist</div>
-    <div class="tab" id="tabBtn-disclosures" onclick="showTab('disclosures',this)">Filings <span class="badge" id="discBadge" style="display:none">0</span></div>
+    <div class="tab" id="tabBtn-companies" onclick="showTab('companies',this)">Watchlist <span class="badge" id="discBadge" style="display:none">0</span></div>
     <div class="tab" id="tabBtn-about" onclick="showTab('about',this)">About</div>
   </div>
 </div>
@@ -519,18 +524,15 @@ button.action:disabled { opacity: .5; cursor: default; }
         <div class="co-list" id="coList">
           <p class="empty">No companies yet. Add one above to get started.</p>
         </div>
-      </div>
-    </div>
 
-    <!-- Filings tab -->
-    <div class="tab-body" id="tab-disclosures">
-      <div class="disc-toolbar">
-        <button class="action btn-blue" onclick="loadDiscs()" id="searchBtn">🔍 Search filings</button>
-        <span class="disc-count" id="discCount"></span>
-        <span class="disc-updated" id="discUpdated"></span>
-      </div>
-      <div class="disc-list" id="discList">
-        <p class="empty" style="padding:12px">Add a company, then click "Search filings".</p>
+        <div class="watchlist-divider">
+          <span>Recent Filings</span>
+          <button class="action btn-blue" onclick="loadDiscs()" id="searchBtn">🔄 Refresh</button>
+        </div>
+        <div class="disc-count" id="discCount"></div>
+        <div class="disc-list" id="discList">
+          <p class="empty" style="padding:12px">Add a company to see their filings here.</p>
+        </div>
       </div>
     </div>
   </div>
@@ -698,7 +700,7 @@ const TIP_CONTENT = {
   dart: {
     title: 'How it works',
     steps: [
-      'Add companies to your watchlist',
+      'Add companies - their recent filings load automatically below',
       'Click a filing to read the AI summary',
     ],
   },
@@ -775,6 +777,7 @@ async function loadCompanies() {
   const r = await apiFetch('/api/companies');
   if (r.status === 401) { showGate(); return; }
   render_companies(await r.json());
+  loadDiscs();
 }
 
 function render_companies(list) {
@@ -855,6 +858,7 @@ function askDelete(i, btn) {
 async function confirmDelete(enc) {
   const r = await apiFetch('/api/companies/' + enc, {method:'DELETE'});
   render_companies(await r.json());
+  loadDiscs();
 }
 
 // ── search-as-you-type dropdown ────────────────────────
@@ -974,6 +978,7 @@ async function addCompany() {
     }
 
     render_companies(res.companies);
+    loadDiscs();
     status.className = 'add-status ok';
     status.textContent = res.resolved === name ? `Added ${res.resolved}` : `Matched "${name}" → ${res.resolved}`;
     inp.value = '';
@@ -992,8 +997,9 @@ let _discs = [];
 async function loadDiscs() {
   const btn = document.getElementById('searchBtn');
   if (!window._companies || !window._companies.length) {
-    document.getElementById('discCount').textContent = 'Add a company to your watchlist first';
-    showTab('disclosures', document.getElementById('tabBtn-disclosures'));
+    document.getElementById('discCount').textContent = '';
+    document.getElementById('discList').innerHTML =
+      '<p class="empty" style="padding:12px">Add a company to see their filings here.</p>';
     return;
   }
   const orig = btn.innerHTML;
@@ -1013,11 +1019,9 @@ async function loadDiscs() {
     _discs = data;
     render_discs(data);
     document.getElementById('discCount').textContent = `${data.length} result${data.length===1?'':'s'} (last 90 days)`;
-    document.getElementById('discUpdated').textContent = 'Updated just now';
     const badge = document.getElementById('discBadge');
     badge.textContent = data.length;
     badge.style.display = data.length ? 'inline-block' : 'none';
-    showTab('disclosures', document.getElementById('tabBtn-disclosures'));
   } catch(e) {
     document.getElementById('discList').innerHTML =
       `<div class="error-box"><div><div class="title">Network error</div>Could not reach the server. Please try again.</div></div>`;
