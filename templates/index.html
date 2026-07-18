@@ -563,13 +563,13 @@ button.action:disabled { opacity: .5; cursor: default; }
       <p class="empty" style="padding:12px">Click Refresh to load the latest videos.</p>
     </div>
     <div class="sentiment-panel" id="sentimentPanel">
-      <div class="sentiment-panel-title">Market Sentiment</div>
-      <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
+      <div class="sentiment-panel-title" id="sentimentPanelTitle">Market Sentiment</div>
+      <div class="sentiment-panel-sub" id="sentimentPanelSub">Last 14 days, from video summaries</div>
       <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
     </div>
     <div class="sentiment-panel topics-section" id="topicsSection">
-      <div class="sentiment-panel-title">Trending Topics</div>
-      <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags</div>
+      <div class="sentiment-panel-title" id="topicsPanelTitle">Trending Topics</div>
+      <div class="sentiment-panel-sub" id="topicsPanelSub">Last 14 days, most-mentioned tags</div>
       <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
     </div>
   </div>
@@ -1082,6 +1082,8 @@ async function onDiscClick(idx, el) {
 
 // ── market issues (YouTube summaries) ──────────────────
 let _marketItems = [];
+let _dailySentiment = [];
+let _trendingTopics = [];
 let _marketLang = localStorage.getItem('marketLang') || 'en';
 
 const MARKET_LABELS = {
@@ -1095,6 +1097,10 @@ const MARKET_LABELS = {
     summarizing: 'Summarizing with GPT...', summarizeFailed: 'Could not generate a summary',
     loadFailed: 'Could not load', networkError: 'Network error - please try again.',
     somethingWrong: 'Something went wrong', pendingPreview: 'Summary not ready yet - expand to generate it now.',
+    sentimentTitle: 'Market Sentiment', sentimentSub: 'Last 14 days, from video summaries',
+    topicsTitle: 'Trending Topics', topicsSub: 'Last 14 days, most-mentioned tags',
+    posWord: 'positive', negWord: 'negative', neuWord: 'neutral',
+    sentimentNoData: 'No data yet.', topicsNoData: 'No data yet.',
   },
   ko: {
     refresh: '🔄 새로고침', loading: '⏳ 불러오는 중...',
@@ -1106,22 +1112,37 @@ const MARKET_LABELS = {
     summarizing: 'GPT로 요약 중...', summarizeFailed: '요약 생성 실패',
     loadFailed: '불러오기 실패', networkError: '네트워크 오류. 다시 시도해주세요.',
     somethingWrong: 'Something went wrong', pendingPreview: '요약을 준비 중입니다 — 펼치면 바로 만들어드려요.',
+    sentimentTitle: '시장 심리', sentimentSub: '최근 14일, 영상 요약 기준',
+    topicsTitle: '트렌딩 토픽', topicsSub: '최근 14일, 가장 많이 언급된 주제',
+    posWord: '긍정', negWord: '부정', neuWord: '중립',
+    sentimentNoData: '아직 데이터가 없습니다.', topicsNoData: '아직 데이터가 없습니다.',
   },
 };
 function L() { return MARKET_LABELS[_marketLang]; }
 function marketTitle(v) { return _marketLang === 'en' ? (v.title_en || v.title) : v.title; }
 function marketSummary(v) { return _marketLang === 'en' ? (v.summary_en || v.summary) : (v.summary || v.summary_en); }
 
+function applyMarketPanelLabels() {
+  document.getElementById('sentimentPanelTitle').textContent = L().sentimentTitle;
+  document.getElementById('sentimentPanelSub').textContent = L().sentimentSub;
+  document.getElementById('topicsPanelTitle').textContent = L().topicsTitle;
+  document.getElementById('topicsPanelSub').textContent = L().topicsSub;
+}
+
 function setMarketLang(lang) {
   _marketLang = lang;
   localStorage.setItem('marketLang', lang);
   document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
   document.getElementById('marketBtn').innerHTML = L().refresh;
+  applyMarketPanelLabels();
   if (_marketItems.length) render_market(_marketItems);
+  render_sentiment_panel(_dailySentiment);
+  render_trending_topics(_trendingTopics);
 }
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === _marketLang));
   document.getElementById('marketBtn').innerHTML = L().refresh;
+  applyMarketPanelLabels();
 });
 
 async function loadMarketIssues() {
@@ -1141,8 +1162,10 @@ async function loadMarketIssues() {
     }
     _marketItems = data.items;
     render_market(data.items);
-    render_sentiment_panel(data.daily_sentiment || []);
-    render_trending_topics(data.trending_topics || []);
+    _dailySentiment = data.daily_sentiment || [];
+    _trendingTopics = data.trending_topics || [];
+    render_sentiment_panel(_dailySentiment);
+    render_trending_topics(_trendingTopics);
     list.dataset.loaded = '1';
     document.getElementById('marketCount').textContent = L().videosCount(data.items.length);
     const badge = document.getElementById('marketBadge');
@@ -1187,12 +1210,12 @@ function render_market(list) {
 
 function render_sentiment_panel(days) {
   const el = document.getElementById('sentimentDays');
-  if (!days.length) { el.innerHTML = '<p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p>'; return; }
+  if (!days.length) { el.innerHTML = `<p class="empty" style="padding:4px 0;font-size:12px">${L().sentimentNoData}</p>`; return; }
   el.innerHTML = days.map(d => {
     const total = d.total || 1;
     const pct = n => (n / total * 100).toFixed(1);
     return `
-    <div class="sentiment-day" title="${d.positive} positive · ${d.negative} negative · ${d.neutral} neutral">
+    <div class="sentiment-day" title="${d.positive} ${L().posWord} · ${d.negative} ${L().negWord} · ${d.neutral} ${L().neuWord}">
       <span class="sentiment-dot ${d.label}"></span>
       <span class="sentiment-day-date">${d.day.slice(5)}</span>
       <span class="sentiment-day-bar">
@@ -1207,7 +1230,7 @@ function render_sentiment_panel(days) {
 
 function render_trending_topics(topics) {
   const el = document.getElementById('trendingTopics');
-  if (!topics.length) { el.innerHTML = '<p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p>'; return; }
+  if (!topics.length) { el.innerHTML = `<p class="empty" style="padding:4px 0;font-size:12px">${L().topicsNoData}</p>`; return; }
   const maxCount = topics[0].count || 1;
   el.innerHTML = `<div class="topic-cloud">${topics.map(t => {
     const scale = 0.85 + (t.count / maxCount) * 0.45; // 0.85x .. 1.3x font size
