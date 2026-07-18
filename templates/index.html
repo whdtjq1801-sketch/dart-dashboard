@@ -389,6 +389,45 @@ button.action:disabled { opacity: .5; cursor: default; }
 .heatmap-tooltip .t-name { font-weight: 700; margin-bottom: 2px; }
 .heatmap-tooltip .t-row { color: rgba(255,255,255,.75); font-size: 11px; }
 
+/* ── screener ── */
+.screener-feed { flex: 1; display: none; flex-direction: column; overflow: hidden; padding: 16px 20px; }
+.screener-feed.active { display: flex; }
+.screener-search {
+  padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 12.5px; outline: none; background: var(--paper); color: var(--ink); width: 220px;
+}
+.screener-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); background: var(--card); }
+.screener-sector-select {
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 12.5px; outline: none; background: var(--paper); color: var(--ink);
+}
+.screener-table-wrap {
+  flex: 1; overflow: auto; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm);
+}
+.screener-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.screener-table thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--paper); text-align: right;
+  padding: 10px 14px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .03em; cursor: pointer; user-select: none; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.screener-table thead th:first-child, .screener-table thead th:nth-child(2), .screener-table thead th:nth-child(3) { text-align: left; }
+.screener-table thead th:hover { color: var(--primary); }
+.screener-table thead th .sort-arrow { opacity: .35; margin-left: 3px; }
+.screener-table thead th.sorted .sort-arrow { opacity: 1; color: var(--primary); }
+.screener-table tbody td { padding: 9px 14px; text-align: right; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.screener-table tbody td:first-child, .screener-table tbody td:nth-child(2), .screener-table tbody td:nth-child(3) { text-align: left; }
+.screener-table tbody tr:hover { background: var(--paper); }
+.screener-table tbody tr:last-child td { border-bottom: none; }
+.screener-rank { color: var(--muted-soft); }
+.screener-ticker { color: var(--muted); font-size: 11.5px; }
+.screener-sector-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
+  background: var(--primary-soft); color: var(--primary-dark);
+}
+.screener-chg-up { color: #c0392b; font-weight: 700; }
+.screener-chg-down { color: #2a78d6; font-weight: 700; }
+
 /* ── about / feedback ── */
 .about-feed { flex: 1; display: none; overflow-y: auto; padding: 24px 20px 40px; }
 .about-feed.active { display: flex; justify-content: center; }
@@ -440,6 +479,10 @@ button.action:disabled { opacity: .5; cursor: default; }
   .news-body-row { flex-direction: column; }
   .news-list { max-width: none; min-width: 0; }
   .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
+
+  .screener-feed .news-toolbar { flex-wrap: wrap; }
+  .screener-search { width: 100%; order: 3; }
+  .screener-sector-select { flex: 1; order: 4; }
 }
 
 /* ── email gate ── */
@@ -498,6 +541,7 @@ button.action:disabled { opacity: .5; cursor: default; }
   <div class="tabs">
     <div class="tab active" id="tabBtn-market" onclick="showTab('market',this)">Market News <span class="badge" id="marketBadge" style="display:none">0</span></div>
     <div class="tab" id="tabBtn-heatmap" onclick="showTab('heatmap',this)">Heatmap</div>
+    <div class="tab" id="tabBtn-screener" onclick="showTab('screener',this)">Screener</div>
     <div class="tab" id="tabBtn-companies" onclick="showTab('companies',this)">Watchlist <span class="badge" id="discBadge" style="display:none">0</span></div>
     <div class="tab" id="tabBtn-about" onclick="showTab('about',this)">About</div>
   </div>
@@ -593,6 +637,21 @@ button.action:disabled { opacity: .5; cursor: default; }
     <p class="empty" style="padding:12px">Click Refresh to load the KOSPI heatmap.</p>
   </div>
   <div class="heatmap-tooltip" id="heatmapTooltip"></div>
+</div>
+
+<!-- Screener - sortable/filterable table, full-width, shown instead of .main -->
+<div class="screener-feed" id="screenerFeedWrap">
+  <div class="news-toolbar">
+    <button class="action btn-blue" onclick="loadScreener()" id="screenerBtn">🔄 Refresh</button>
+    <span class="disc-count" id="screenerUpdated"></span>
+    <input type="text" id="screenerSearch" class="screener-search" placeholder="Search ticker or name..." oninput="applyScreenerFilters()">
+    <select id="screenerSectorFilter" class="screener-sector-select" onchange="applyScreenerFilters()">
+      <option value="">All sectors</option>
+    </select>
+  </div>
+  <div class="screener-table-wrap" id="screenerTableWrap">
+    <p class="empty" style="padding:12px">Click Refresh to load the KOSPI screener.</p>
+  </div>
 </div>
 
 <!-- About - full-width, shown instead of .main -->
@@ -697,6 +756,13 @@ const TIP_CONTENT = {
       'Box size = market cap · color = today\'s % change (red = up, blue = down) · tap a box for details',
     ],
   },
+  screener: {
+    title: 'Screener',
+    steps: [
+      'Same top-80 KOSPI list as the Heatmap, as a sortable table',
+      'Click a column header to sort · use search/sector to filter',
+    ],
+  },
   dart: {
     title: 'How it works',
     steps: [
@@ -709,6 +775,7 @@ const TIP_CONTENT = {
 function tipGroupFor(name) {
   if (name === 'market') return 'market';
   if (name === 'heatmap') return 'heatmap';
+  if (name === 'screener') return 'screener';
   if (name === 'about') return 'none';
   return 'dart';
 }
@@ -746,10 +813,12 @@ function showTab(name, el) {
   const mainSplit    = document.getElementById('mainSplit');
   const marketFeed    = document.getElementById('marketFeedWrap');
   const heatmapFeed    = document.getElementById('heatmapFeedWrap');
+  const screenerFeed   = document.getElementById('screenerFeedWrap');
   const aboutFeed      = document.getElementById('aboutFeedWrap');
   mainSplit.classList.add('hidden');
   marketFeed.classList.remove('active');
   heatmapFeed.classList.remove('active');
+  screenerFeed.classList.remove('active');
   aboutFeed.classList.remove('active');
 
   if (name === 'market') {
@@ -760,6 +829,11 @@ function showTab(name, el) {
   if (name === 'heatmap') {
     heatmapFeed.classList.add('active');
     if (!document.getElementById('heatmapContainer').dataset.loaded) loadHeatmap();
+    return;
+  }
+  if (name === 'screener') {
+    screenerFeed.classList.add('active');
+    if (!document.getElementById('screenerTableWrap').dataset.loaded) loadScreener();
     return;
   }
   if (name === 'about') {
@@ -1602,6 +1676,136 @@ window.addEventListener('resize', () => {
     if (document.getElementById('heatmapFeedWrap').classList.contains('active')) renderHeatmap();
   }, 150);
 });
+
+// ── screener ────────────────────────────────────────────
+let _screenerItems = [];
+let _screenerSort = { key: 'market_cap', dir: 'desc' };
+let _screenerSearch = '';
+let _screenerSectorFilter = '';
+
+async function loadScreener() {
+  const btn = document.getElementById('screenerBtn');
+  const wrap = document.getElementById('screenerTableWrap');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Loading...';
+  try {
+    // Same pre-ingested top-80 KOSPI snapshot the Heatmap reads - just a
+    // different (sortable/filterable table) view of it, no extra fetch.
+    const r = await apiFetch('/api/kospi-heatmap');
+    if (r.status === 401) { showGate(); return; }
+    const data = await r.json();
+    if (data.error) {
+      wrap.innerHTML = `<div class="error-box"><div><div class="title">Could not load</div>${data.error}</div></div>`;
+      return;
+    }
+    _screenerItems = data.items;
+    wrap.dataset.loaded = '1';
+    if (data.index) _usdKrw = data.index.usd_krw;
+    document.getElementById('screenerUpdated').textContent =
+      data.updated_at ? `Updated ${data.updated_at.slice(0, 16).replace('T', ' ')} KST · ${data.items.length} stocks` : '';
+    populateScreenerSectorFilter(_screenerItems);
+    renderScreenerTable();
+  } catch (e) {
+    wrap.innerHTML = `<div class="error-box"><div><div class="title">Network error</div>Please try again.</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
+function populateScreenerSectorFilter(items) {
+  const sel = document.getElementById('screenerSectorFilter');
+  const current = sel.value;
+  const sectors = [...new Set(items.map(it => it.sector).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">All sectors</option>' +
+    sectors.map(s => `<option value="${s}">${s}</option>`).join('');
+  if (sectors.includes(current)) sel.value = current;
+}
+
+function applyScreenerFilters() {
+  _screenerSearch = document.getElementById('screenerSearch').value.trim().toLowerCase();
+  _screenerSectorFilter = document.getElementById('screenerSectorFilter').value;
+  renderScreenerTable();
+}
+
+function sortScreener(key) {
+  if (_screenerSort.key === key) {
+    _screenerSort.dir = _screenerSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    // Text-ish columns default to A-Z, numeric columns default to
+    // highest-first - whichever reads naturally on first click.
+    _screenerSort = { key, dir: (key === 'name' || key === 'sector') ? 'asc' : 'desc' };
+  }
+  renderScreenerTable();
+}
+
+const SCREENER_COLUMNS = [
+  { key: 'rank',        label: '#' },
+  { key: 'name',        label: 'Company' },
+  { key: 'sector',      label: 'Sector' },
+  { key: 'market_cap',  label: 'Market Cap' },
+  { key: 'close_price', label: 'Price' },
+  { key: 'change_pct',  label: 'Change' },
+];
+
+function renderScreenerTable() {
+  const wrap = document.getElementById('screenerTableWrap');
+  if (!_screenerItems.length) {
+    wrap.innerHTML = '<p class="empty" style="padding:12px">No data yet - the batch job hasn\'t run.</p>';
+    return;
+  }
+
+  let rows = _screenerItems.filter(it => {
+    if (_screenerSectorFilter && it.sector !== _screenerSectorFilter) return false;
+    if (_screenerSearch) {
+      const hay = `${it.name_en || ''} ${it.name || ''} ${it.ticker || ''}`.toLowerCase();
+      if (!hay.includes(_screenerSearch)) return false;
+    }
+    return true;
+  });
+
+  if (!rows.length) {
+    wrap.innerHTML = '<p class="empty" style="padding:12px">No stocks match your filters.</p>';
+    return;
+  }
+
+  const { key, dir } = _screenerSort;
+  if (key !== 'rank') {
+    rows = rows.slice().sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toLowerCase(); }
+      if (av < bv) return dir === 'asc' ? -1 : 1;
+      if (av > bv) return dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  } else if (dir === 'asc') {
+    rows = rows.slice().reverse();
+  }
+
+  const head = `<thead><tr>${SCREENER_COLUMNS.map(c => {
+    const sorted = c.key === key ? 'sorted' : '';
+    const arrow = c.key === key ? (dir === 'desc' ? '▾' : '▴') : '▾';
+    return `<th class="${sorted}" onclick="sortScreener('${c.key}')">${c.label}<span class="sort-arrow">${arrow}</span></th>`;
+  }).join('')}</tr></thead>`;
+
+  const body = rows.map((it, i) => {
+    const chg = Number(it.change_pct) || 0;
+    const chgCls = chg > 0 ? 'screener-chg-up' : chg < 0 ? 'screener-chg-down' : '';
+    const chgText = `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`;
+    const capUsd = _usdKrw ? ` <span class="screener-ticker">(~$${(it.market_cap / _usdKrw / 1e9).toFixed(1)}B)</span>` : '';
+    return `<tr>
+      <td class="screener-rank">${i + 1}</td>
+      <td>${it.name_en || it.name}<div class="screener-ticker">${it.ticker}</div></td>
+      <td><span class="screener-sector-pill">${it.sector || '—'}</span></td>
+      <td>${(it.market_cap / 1e12).toFixed(2)}T KRW${capUsd}</td>
+      <td>${it.close_price.toLocaleString()} KRW</td>
+      <td class="${chgCls}">${chgText}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<table class="screener-table">${head}<tbody>${body}</tbody></table>`;
+}
 
 // ── feedback ────────────────────────────────────────────
 async function submitFeedback() {
