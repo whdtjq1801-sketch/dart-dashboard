@@ -273,9 +273,10 @@ button.action:disabled { opacity: .5; cursor: default; }
 .news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 760px; padding-bottom: 24px; min-width: 0; }
 
 /* ── market sentiment panel ── */
+.news-side-col { flex: 0 0 300px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
 .sentiment-panel {
-  flex: 0 0 300px; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 18px; align-self: stretch;
+  flex: none; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 18px;
 }
 .sentiment-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
 .sentiment-panel-sub { font-size: 11.5px; color: var(--muted-soft); margin-bottom: 16px; }
@@ -296,6 +297,14 @@ button.action:disabled { opacity: .5; cursor: default; }
 .sentiment-day-bar .seg-neu { background: #d8d6cf; }
 .sentiment-day-count { font-size: 11px; color: var(--muted-soft); flex-shrink: 0; width: 20px; text-align: right; }
 .news-sentiment-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: middle; }
+
+.topic-cloud { display: flex; flex-wrap: wrap; gap: 7px; }
+.topic-tag {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 999px;
+  background: var(--primary-soft); border: 1px solid var(--primary-line); color: var(--primary-dark);
+  font-weight: 700; white-space: nowrap;
+}
+.topic-tag .n { font-weight: 600; opacity: .65; font-size: 10px; }
 
 .news-card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
@@ -419,7 +428,8 @@ button.action:disabled { opacity: .5; cursor: default; }
 
   .news-body-row { flex-direction: column; }
   .news-list { max-width: none; }
-  .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
+  .news-side-col { flex: 0 0 auto; }
+  .sentiment-panel { max-height: 260px; }
 }
 
 /* ── email gate ── */
@@ -548,10 +558,17 @@ button.action:disabled { opacity: .5; cursor: default; }
     <div class="news-list" id="marketList">
       <p class="empty" style="padding:12px">Click Refresh to load the latest videos.</p>
     </div>
-    <div class="sentiment-panel" id="sentimentPanel">
-      <div class="sentiment-panel-title">Market Sentiment</div>
-      <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
-      <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+    <div class="news-side-col">
+      <div class="sentiment-panel" id="sentimentPanel">
+        <div class="sentiment-panel-title">Market Sentiment</div>
+        <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
+        <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+      </div>
+      <div class="sentiment-panel" id="topicsPanel">
+        <div class="sentiment-panel-title">Trending Topics</div>
+        <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags</div>
+        <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1123,6 +1140,7 @@ async function loadMarketIssues() {
     _marketItems = data.items;
     render_market(data.items);
     render_sentiment_panel(data.daily_sentiment || []);
+    render_trending_topics(data.trending_topics || []);
     list.dataset.loaded = '1';
     document.getElementById('marketCount').textContent = L().videosCount(data.items.length);
     const badge = document.getElementById('marketBadge');
@@ -1183,6 +1201,16 @@ function render_sentiment_panel(days) {
       <span class="sentiment-day-count">${d.total}</span>
     </div>`;
   }).join('');
+}
+
+function render_trending_topics(topics) {
+  const el = document.getElementById('trendingTopics');
+  if (!topics.length) { el.innerHTML = '<p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p>'; return; }
+  const maxCount = topics[0].count || 1;
+  el.innerHTML = `<div class="topic-cloud">${topics.map(t => {
+    const scale = 0.85 + (t.count / maxCount) * 0.45; // 0.85x .. 1.3x font size
+    return `<span class="topic-tag" style="font-size:${(12.5 * scale).toFixed(1)}px">${t.topic}<span class="n">${t.count}</span></span>`;
+  }).join('')}</div>`;
 }
 
 function renderNewsDetail(v, summary) {
