@@ -761,6 +761,7 @@ const TIP_CONTENT = {
     steps: [
       'Same top-80 KOSPI list as the Heatmap, as a sortable table',
       'Click a column header to sort · use search/sector to filter',
+      'P/E, P/B, and dividend yield update once daily from KRX',
     ],
   },
   dart: {
@@ -1747,6 +1748,9 @@ const SCREENER_COLUMNS = [
   { key: 'market_cap',  label: 'Market Cap' },
   { key: 'close_price', label: 'Price' },
   { key: 'change_pct',  label: 'Change' },
+  { key: 'per',         label: 'P/E' },
+  { key: 'pbr',         label: 'P/B' },
+  { key: 'div_yield',   label: 'Div Yield' },
 ];
 
 function renderScreenerTable() {
@@ -1774,6 +1778,11 @@ function renderScreenerTable() {
   if (key !== 'rank') {
     rows = rows.slice().sort((a, b) => {
       let av = a[key], bv = b[key];
+      // Stocks without PER/PBR/DIV yet (loss-making, or not yet
+      // backfilled) sort last regardless of direction rather than
+      // clustering at whichever end 0/null happens to collate to.
+      if (av === null || av === undefined) return bv === null || bv === undefined ? 0 : 1;
+      if (bv === null || bv === undefined) return -1;
       if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toLowerCase(); }
       if (av < bv) return dir === 'asc' ? -1 : 1;
       if (av > bv) return dir === 'asc' ? 1 : -1;
@@ -1801,6 +1810,9 @@ function renderScreenerTable() {
       <td>${(it.market_cap / 1e12).toFixed(2)}T KRW${capUsd}</td>
       <td>${it.close_price.toLocaleString()} KRW</td>
       <td class="${chgCls}">${chgText}</td>
+      <td>${it.per != null ? it.per.toFixed(1) : '—'}</td>
+      <td>${it.pbr != null ? it.pbr.toFixed(2) : '—'}</td>
+      <td>${it.div_yield != null ? it.div_yield.toFixed(2) + '%' : '—'}</td>
     </tr>`;
   }).join('');
 

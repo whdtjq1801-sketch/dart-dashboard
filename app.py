@@ -166,6 +166,10 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS per NUMERIC(10,2);
+    ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS pbr NUMERIC(10,2);
+    ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS div_yield NUMERIC(6,2);
+
     CREATE TABLE IF NOT EXISTS kospi_index_snapshot (
         id INTEGER PRIMARY KEY DEFAULT 1,
         kospi_close NUMERIC(12,2),
@@ -1104,6 +1108,38 @@ def fetch_kospi_top_stocks(top_n=KOSPI_HEATMAP_TOP_N):
         'industry_hint': r['Industry'] if isinstance(r['Industry'], str) else '',
     } for _, r in top.iterrows()]
 
+def fetch_kospi_fundamentals(tickers):
+    """PER/PBR/dividend yield for the given tickers via pykrx, keyed by
+    ticker. pykrx now requires a logged-in data.krx.co.kr session
+    (KRX_ID/KRX_PW env vars) since KRX started blocking anonymous scraping
+    of this endpoint - it self-manages login/session refresh. Falls back a
+    few days if the most recent trading day isn't published yet."""
+    from pykrx import stock
+    from datetime import date, timedelta
+    df = None
+    for i in range(10):
+        day = (date.today() - timedelta(days=i)).strftime('%Y%m%d')
+        try:
+            candidate = stock.get_market_fundamental(day, market='KOSPI')
+        except Exception:
+            continue
+        if candidate is not None and not candidate.empty and candidate['PER'].abs().sum() > 0:
+            df = candidate
+            break
+    if df is None:
+        return {}
+    out = {}
+    for ticker in tickers:
+        if ticker not in df.index:
+            continue
+        row = df.loc[ticker]
+        out[ticker] = {
+            'per':       float(row['PER']) if row['PER'] else None,
+            'pbr':       float(row['PBR']) if row['PBR'] else None,
+            'div_yield': float(row['DIV']) if row['DIV'] else None,
+        }
+    return out
+
 def fetch_kospi_index():
     """Latest KOSPI index level (KS11) and USD/KRW rate - the headline
     numbers a foreign reader wants before drilling into individual stocks.
@@ -1192,13 +1228,15 @@ def get_existing_sectors(tickers):
 
 def save_kospi_snapshot(stocks_with_sector):
     sql = """
-        INSERT INTO kospi_heatmap (ticker, name, sector, market_cap, change_pct, close_price, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO kospi_heatmap (ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (ticker) DO UPDATE SET
             name = EXCLUDED.name,
             sector = COALESCE(EXCLUDED.sector, kospi_heatmap.sector),
             market_cap = EXCLUDED.market_cap, change_pct = EXCLUDED.change_pct,
-            close_price = EXCLUDED.close_price, updated_at = CURRENT_TIMESTAMP
+            close_price = EXCLUDED.close_price,
+            per = EXCLUDED.per, pbr = EXCLUDED.pbr, div_yield = EXCLUDED.div_yield,
+            updated_at = CURRENT_TIMESTAMP
     """
     tickers = [s['ticker'] for s in stocks_with_sector]
     with get_db() as conn:
@@ -1206,7 +1244,8 @@ def save_kospi_snapshot(stocks_with_sector):
             for s in stocks_with_sector:
                 cur.execute(sql, (
                     s['ticker'], s['name'], s['sector'],
-                    s['market_cap'], s['change_pct'], s['close_price']
+                    s['market_cap'], s['change_pct'], s['close_price'],
+                    s.get('per'), s.get('pbr'), s.get('div_yield')
                 ))
             # Drop anything that fell out of today's top-N so a stale market
             # cap from a stock that's no longer in it can't outrank a
@@ -1540,7 +1579,7 @@ def api_kospi_heatmap():
         return jsonify({'error': 'Please sign in with your email first.'}), 401
     try:
         sql = """
-            SELECT ticker, name, sector, market_cap, change_pct, close_price, updated_at
+            SELECT ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield, updated_at
             FROM kospi_heatmap
             ORDER BY market_cap DESC
             LIMIT %s
@@ -1557,6 +1596,9 @@ def api_kospi_heatmap():
             'market_cap':  r['market_cap'],
             'change_pct':  float(r['change_pct']) if r['change_pct'] is not None else 0.0,
             'close_price': r['close_price'],
+            'per':         float(r['per']) if r['per'] is not None else None,
+            'pbr':         float(r['pbr']) if r['pbr'] is not None else None,
+            'div_yield':   float(r['div_yield']) if r['div_yield'] is not None else None,
         } for r in rows]
         updated_at = rows[0]['updated_at'].isoformat() if rows else None
 

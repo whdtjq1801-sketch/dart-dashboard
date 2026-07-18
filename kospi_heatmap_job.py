@@ -23,7 +23,8 @@ if sys.stdout.encoding.lower() != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 from app import fetch_kospi_top_stocks, classify_sectors, get_existing_sectors, \
-    save_kospi_snapshot, fetch_kospi_index, save_kospi_index_snapshot, KOSPI_HEATMAP_TOP_N
+    save_kospi_snapshot, fetch_kospi_index, save_kospi_index_snapshot, \
+    fetch_kospi_fundamentals, KOSPI_HEATMAP_TOP_N
 
 
 def run():
@@ -52,6 +53,18 @@ def run():
         # returned - a fake-but-cached sector would otherwise look
         # "classified" and never get retried on a later run.
         s['sector'] = sectors.get(s['ticker'])
+
+    try:
+        fundamentals = fetch_kospi_fundamentals([s['ticker'] for s in stocks])
+        print(f'fundamentals fetched for {len(fundamentals)}/{len(stocks)} tickers', flush=True)
+    except Exception as e:
+        print(f'could not fetch KRX fundamentals (PER/PBR/DIV): {e}', flush=True)
+        fundamentals = {}
+    for s in stocks:
+        f = fundamentals.get(s['ticker'], {})
+        s['per'] = f.get('per')
+        s['pbr'] = f.get('pbr')
+        s['div_yield'] = f.get('div_yield')
 
     save_kospi_snapshot(stocks)
 

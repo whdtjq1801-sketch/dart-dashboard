@@ -7,3 +7,5 @@ yfinance
 psycopg2-binary
 youtube-transcript-api
 finance-datareader
+pykrx
+setuptools<81
