@@ -280,11 +280,10 @@ button.action:disabled { opacity: .5; cursor: default; }
 
 /* Trending Topics - its own full-width band below the feed/sentiment row,
    not squeezed into the sidebar. */
-.topics-section {
-  flex: 0 0 auto; margin-top: 16px; max-height: 190px; overflow-y: auto;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  box-shadow: var(--shadow-sm); padding: 18px;
-}
+/* Trending Topics sits beside Market Sentiment (its own card, not merged
+   into it) and grows to use whatever width is left over. */
+.topics-section { flex: 1 1 260px; }
+.topic-cloud { align-content: flex-start; }
 .sentiment-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
 .sentiment-panel-sub { font-size: 11.5px; color: var(--muted-soft); margin-bottom: 16px; }
 .sentiment-day {
@@ -436,7 +435,6 @@ button.action:disabled { opacity: .5; cursor: default; }
   .news-body-row { flex-direction: column; }
   .news-list { max-width: none; }
   .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
-  .topics-section { max-height: none; }
 }
 
 /* ── email gate ── */
@@ -570,11 +568,11 @@ button.action:disabled { opacity: .5; cursor: default; }
       <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
       <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
     </div>
-  </div>
-  <div class="topics-section" id="topicsSection">
-    <div class="sentiment-panel-title">Trending Topics</div>
-    <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags across all videos</div>
-    <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+    <div class="sentiment-panel topics-section" id="topicsSection">
+      <div class="sentiment-panel-title">Trending Topics</div>
+      <div class="sentiment-panel-sub">Last 14 days, most-mentioned tags</div>
+      <div id="trendingTopics"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+    </div>
   </div>
 </div>
 
