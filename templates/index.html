@@ -270,19 +270,18 @@ button.action:disabled { opacity: .5; cursor: default; }
 .lang-btn.active { background: var(--primary); color: white; }
 .lang-btn:not(.active):hover { background: var(--paper); }
 .news-body-row { flex: 1; display: flex; gap: 16px; overflow: hidden; min-height: 0; }
-.news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 760px; padding-bottom: 24px; min-width: 0; }
+.news-list { flex: 2 1 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 760px; padding-bottom: 24px; min-width: 420px; }
 
 /* ── market sentiment panel ── */
 .sentiment-panel {
-  flex: 0 0 320px; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+  flex: 1 1 320px; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 18px;
 }
 
-/* Trending Topics - its own full-width band below the feed/sentiment row,
-   not squeezed into the sidebar. */
-/* Trending Topics sits beside Market Sentiment (its own card, not merged
-   into it) and grows to use whatever width is left over. */
-.topics-section { flex: 1 1 260px; }
+/* Trending Topics sits beside Market Sentiment as its own card, same
+   flex-basis so however many side cards there are, they split the row
+   evenly instead of one stretching wider than the others. */
+.topics-section { flex: 1 1 320px; }
 .topic-cloud { align-content: flex-start; }
 .sentiment-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
 .sentiment-panel-sub { font-size: 11.5px; color: var(--muted-soft); margin-bottom: 16px; }
@@ -433,7 +432,7 @@ button.action:disabled { opacity: .5; cursor: default; }
   .heatmap-index-bar .idx-fx { margin-left: 0; flex-basis: 100%; }
 
   .news-body-row { flex-direction: column; }
-  .news-list { max-width: none; }
+  .news-list { max-width: none; min-width: 0; }
   .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
 }
 
