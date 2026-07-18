@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request, render_template
 import requests as http
 import yfinance as yf
@@ -153,6 +153,7 @@ def init_db():
 
     ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS title_en VARCHAR(300);
     ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS summary_en TEXT;
+    ALTER TABLE video_summaries ADD COLUMN IF NOT EXISTS sentiment VARCHAR(10);
 
     CREATE TABLE IF NOT EXISTS kospi_heatmap (
         ticker VARCHAR(10) PRIMARY KEY,
@@ -339,7 +340,7 @@ def get_cached_video_summary(video_id):
     """A GPT summary for a given video never changes, so once anyone has
     summarized a video we can serve it to everyone else for free instead
     of paying for another OpenAI call."""
-    sql = "SELECT title, title_en, summary, summary_en FROM video_summaries WHERE video_id = %s"
+    sql = "SELECT title, title_en, summary, summary_en, sentiment FROM video_summaries WHERE video_id = %s"
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (video_id,))
@@ -351,35 +352,75 @@ def get_cached_video_summary(video_id):
         'title_en':   row['title_en'],
         'summary':    row['summary'],
         'summary_en': row['summary_en'],
+        'sentiment':  row['sentiment'],
     }
 
-def save_video_summary(video_id, channel_name, title, title_en, published_at, summary, summary_en):
+def save_video_summary(video_id, channel_name, title, title_en, published_at, summary, summary_en, sentiment):
     # If a prior write left this row with an empty/NULL summary_en (e.g. GPT's
     # JSON omitted the key), a later call with a good summary should repair
     # it in place rather than silently discarding the fix.
     sql = """
-        INSERT INTO video_summaries (video_id, channel_name, title, title_en, published_at, summary, summary_en)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO video_summaries (video_id, channel_name, title, title_en, published_at, summary, summary_en, sentiment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (video_id) DO UPDATE SET
-            title_en = EXCLUDED.title_en, summary = EXCLUDED.summary, summary_en = EXCLUDED.summary_en
+            title_en = EXCLUDED.title_en, summary = EXCLUDED.summary, summary_en = EXCLUDED.summary_en,
+            sentiment = EXCLUDED.sentiment
         WHERE video_summaries.summary_en IS NULL OR video_summaries.summary_en = ''
     """
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (video_id, channel_name, title, title_en, published_at, summary, summary_en))
+            cur.execute(sql, (video_id, channel_name, title, title_en, published_at, summary, summary_en, sentiment))
 
 def get_rows_missing_english():
-    sql = "SELECT video_id, channel_name, title, summary FROM video_summaries WHERE summary_en IS NULL OR summary_en = ''"
+    sql = """
+        SELECT video_id, channel_name, title, summary FROM video_summaries
+        WHERE summary_en IS NULL OR summary_en = '' OR sentiment IS NULL
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
             return cur.fetchall()
 
-def update_video_summary_en(video_id, title_en, summary_en):
-    sql = "UPDATE video_summaries SET title_en = %s, summary_en = %s WHERE video_id = %s"
+def update_video_summary_en(video_id, title_en, summary_en, sentiment):
+    sql = "UPDATE video_summaries SET title_en = %s, summary_en = %s, sentiment = %s WHERE video_id = %s"
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (title_en, summary_en, video_id))
+            cur.execute(sql, (title_en, summary_en, sentiment, video_id))
+
+def get_daily_sentiment(days=14):
+    """One row per calendar day (UTC) with pos/neg/neutral video counts and
+    an overall label for that day, most recent first. published_at is
+    stored as an ISO-8601 string, so a plain string LEFT(...,10)/compare
+    works without a timestamp cast."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+    sql = """
+        SELECT LEFT(published_at, 10) AS day,
+               COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
+               COUNT(*) FILTER (WHERE sentiment = 'negative') AS negative,
+               COUNT(*) FILTER (WHERE sentiment = 'neutral')  AS neutral
+        FROM video_summaries
+        WHERE sentiment IS NOT NULL AND published_at >= %s
+        GROUP BY day
+        ORDER BY day DESC
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (cutoff,))
+            rows = cur.fetchall()
+    result = []
+    for r in rows:
+        pos, neg, neu = r['positive'], r['negative'], r['neutral']
+        if pos > neg and pos >= neu:
+            label = 'positive'
+        elif neg > pos and neg >= neu:
+            label = 'negative'
+        else:
+            label = 'neutral'
+        result.append({
+            'day': r['day'], 'positive': pos, 'negative': neg, 'neutral': neu,
+            'total': pos + neg + neu, 'label': label,
+        })
+    return result
 
 
 def download_corp_codes():
@@ -870,22 +911,27 @@ def fetch_video_transcript(video_id, max_chars=6000):
     except Exception:
         return None
 
+SENTIMENT_CHOICES = ('positive', 'negative', 'neutral')
+
 def summarize_video_bilingual(channel_name, title, transcript):
     """One GPT call produces an English title + English summary (the app's
-    default reading language) plus a Korean summary (for the language
-    switch), instead of two separate calls. Returns
-    {'title_en', 'summary_en', 'summary_ko'}."""
+    default reading language), a Korean summary (for the language switch),
+    and a market-sentiment label, instead of separate calls. Returns
+    {'title_en', 'summary_en', 'summary_ko', 'sentiment'}."""
     rule = (
         "You are summarizing a Korean economics/current-affairs YouTube video for "
         "an investor-focused market issues feed. Respond with a single JSON object "
-        'with exactly three keys: "title_en" (a natural English rendering of the '
+        'with exactly four keys: "title_en" (a natural English rendering of the '
         'video title, not a literal word-for-word translation), "summary_en" (an '
         "English summary, under 120 words, investor's-eye view: core content, "
-        'positive factors, risks, and what to verify next), and "summary_ko" (a '
+        'positive factors, risks, and what to verify next), "summary_ko" (a '
         "Korean summary of the same content, around 300 characters, same "
-        "investor's-eye structure). Flag anything uncertain or speculative as such "
-        "in both summaries. Judge the video on its own content, not on short-term "
-        "market moves."
+        'investor\'s-eye structure), and "sentiment" (one of exactly '
+        '"positive", "negative", or "neutral" - the overall implication for '
+        "Korean/global markets if a viewer acted on this video's content; "
+        '"neutral" if it\'s informational with no clear market direction). '
+        "Flag anything uncertain or speculative as such in both summaries. "
+        "Judge the video on its own content, not on short-term market moves."
     )
     if transcript:
         prompt = f"Channel: {channel_name}\nTitle: {title}\n\n{rule}\n\n[Transcript]\n{transcript}"
@@ -904,22 +950,29 @@ def summarize_video_bilingual(channel_name, title, transcript):
         temperature=0.3
     )
     data = json.loads(resp.choices[0].message.content)
+    sentiment = data.get('sentiment')
+    if sentiment not in SENTIMENT_CHOICES:
+        sentiment = 'neutral'
     return {
         'title_en':   data.get('title_en') or title,
         'summary_en': data.get('summary_en', ''),
         'summary_ko': data.get('summary_ko', ''),
+        'sentiment':  sentiment,
     }
 
 def translate_summary_to_english(channel_name, title_ko, summary_ko):
-    """Cheap follow-up call for rows that only have the Korean fields (e.g.
-    ingested before the English-first switch) - translates the existing
+    """Cheap follow-up call for rows missing title_en/summary_en/sentiment
+    (e.g. ingested before those fields existed) - works from the existing
     title/summary instead of re-fetching the transcript."""
     prompt = (
         f"Channel: {channel_name}\nKorean title: {title_ko}\nKorean summary: {summary_ko}\n\n"
-        'Respond with a JSON object with two keys: "title_en" (a natural English '
-        'rendering of the title, not word-for-word) and "summary_en" (an English '
+        'Respond with a JSON object with three keys: "title_en" (a natural English '
+        'rendering of the title, not word-for-word), "summary_en" (an English '
         "rendering of the summary, same content and investor's-eye structure, "
-        "under 120 words)."
+        'under 120 words), and "sentiment" (one of exactly "positive", '
+        '"negative", or "neutral" - the overall implication for Korean/global '
+        'markets if a viewer acted on this content; "neutral" if informational '
+        "with no clear market direction)."
     )
     resp = openai_client.chat.completions.create(
         model='gpt-4o-mini',
@@ -929,7 +982,14 @@ def translate_summary_to_english(channel_name, title_ko, summary_ko):
         temperature=0.3
     )
     data = json.loads(resp.choices[0].message.content)
-    return {'title_en': data.get('title_en') or title_ko, 'summary_en': data.get('summary_en', '')}
+    sentiment = data.get('sentiment')
+    if sentiment not in SENTIMENT_CHOICES:
+        sentiment = 'neutral'
+    return {
+        'title_en':   data.get('title_en') or title_ko,
+        'summary_en': data.get('summary_en', ''),
+        'sentiment':  sentiment,
+    }
 
 # ── KOSPI market-cap heatmap ────────────────────────────
 KOSPI_HEATMAP_TOP_N = 80
@@ -1309,7 +1369,7 @@ def api_market_issues():
         # (multiple uploads/day) crowd out a low-frequency one entirely,
         # so cap it per channel instead and merge by date for display.
         sql = """
-            SELECT video_id, channel_name, title, title_en, published_at, summary, summary_en
+            SELECT video_id, channel_name, title, title_en, published_at, summary, summary_en, sentiment
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY channel_name ORDER BY published_at DESC) AS rn
                 FROM video_summaries
@@ -1330,10 +1390,18 @@ def api_market_issues():
             'published_at': r['published_at'],
             'summary':      r['summary'],
             'summary_en':   r['summary_en'],
+            'sentiment':    r['sentiment'],
             'thumbnail':    f"https://i.ytimg.com/vi/{r['video_id']}/mqdefault.jpg",
             'url':          f"https://www.youtube.com/watch?v={r['video_id']}",
         } for r in rows]
-        return jsonify(items)
+
+        try:
+            daily_sentiment = get_daily_sentiment(days=14)
+        except Exception as e:
+            print(f'get_daily_sentiment failed: {e}', flush=True)
+            daily_sentiment = []
+
+        return jsonify({'items': items, 'daily_sentiment': daily_sentiment})
     except Exception as e:
         return jsonify({'error': f'Could not load market issues: {e}'}), 500
 
@@ -1380,7 +1448,8 @@ def api_market_issues_summarize():
                 result['title_en'],
                 data.get('published_at'),
                 result['summary_ko'],
-                result['summary_en']
+                result['summary_en'],
+                result['sentiment']
             )
         except Exception as e:
             print(f'save_video_summary failed: {e}', flush=True)
@@ -1389,6 +1458,7 @@ def api_market_issues_summarize():
             'title_en':   result['title_en'],
             'summary':    result['summary_ko'],
             'summary_en': result['summary_en'],
+            'sentiment':  result['sentiment'],
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

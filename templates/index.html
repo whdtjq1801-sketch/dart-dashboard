@@ -269,7 +269,33 @@ button.action:disabled { opacity: .5; cursor: default; }
 .lang-btn { padding: 6px 14px; font-size: 11.5px; font-weight: 700; border: none; background: var(--card); color: var(--muted); cursor: pointer; }
 .lang-btn.active { background: var(--primary); color: white; }
 .lang-btn:not(.active):hover { background: var(--paper); }
-.news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 820px; margin: 0 auto; width: 100%; padding-bottom: 24px; }
+.news-body-row { flex: 1; display: flex; gap: 16px; overflow: hidden; min-height: 0; }
+.news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; max-width: 760px; padding-bottom: 24px; min-width: 0; }
+
+/* ── market sentiment panel ── */
+.sentiment-panel {
+  flex: 0 0 300px; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 18px; align-self: stretch;
+}
+.sentiment-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+.sentiment-panel-sub { font-size: 11.5px; color: var(--muted-soft); margin-bottom: 16px; }
+.sentiment-day {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.sentiment-day:last-child { border-bottom: none; }
+.sentiment-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+.sentiment-dot.positive { background: #e34948; }
+.sentiment-dot.negative { background: #2a78d6; }
+.sentiment-dot.neutral  { background: #b9b8b2; }
+.sentiment-day-date { font-size: 12.5px; font-weight: 600; color: var(--ink); flex-shrink: 0; width: 46px; }
+.sentiment-day-bar { flex: 1; height: 8px; border-radius: 4px; overflow: hidden; display: flex; background: var(--paper); }
+.sentiment-day-bar span { height: 100%; }
+.sentiment-day-bar .seg-pos { background: #e34948; }
+.sentiment-day-bar .seg-neg { background: #2a78d6; }
+.sentiment-day-bar .seg-neu { background: #d8d6cf; }
+.sentiment-day-count { font-size: 11px; color: var(--muted-soft); flex-shrink: 0; width: 20px; text-align: right; }
+.news-sentiment-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: middle; }
 
 .news-card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
@@ -390,6 +416,10 @@ button.action:disabled { opacity: .5; cursor: default; }
   .heatmap-container { flex: none; height: 1100px; overflow: visible; }
   .heatmap-index-bar { flex-wrap: wrap; }
   .heatmap-index-bar .idx-fx { margin-left: 0; flex-basis: 100%; }
+
+  .news-body-row { flex-direction: column; }
+  .news-list { max-width: none; }
+  .sentiment-panel { flex: 0 0 auto; max-height: 260px; }
 }
 
 /* ── email gate ── */
@@ -514,8 +544,15 @@ button.action:disabled { opacity: .5; cursor: default; }
       <button class="lang-btn" data-lang="ko" onclick="setMarketLang('ko')">KO</button>
     </div>
   </div>
-  <div class="news-list" id="marketList">
-    <p class="empty" style="padding:12px">Click Refresh to load the latest videos.</p>
+  <div class="news-body-row">
+    <div class="news-list" id="marketList">
+      <p class="empty" style="padding:12px">Click Refresh to load the latest videos.</p>
+    </div>
+    <div class="sentiment-panel" id="sentimentPanel">
+      <div class="sentiment-panel-title">Market Sentiment</div>
+      <div class="sentiment-panel-sub">Last 14 days, from video summaries</div>
+      <div id="sentimentDays"><p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p></div>
+    </div>
   </div>
 </div>
 
@@ -629,6 +666,7 @@ const TIP_CONTENT = {
     steps: [
       'AI-translated summaries of Korean finance YouTube channels',
       'Switch EN/KO with the toggle · tap a card to read the full summary',
+      'Right panel: daily market sentiment (🔴 positive / 🔵 negative) from each day\'s videos',
     ],
   },
   heatmap: {
@@ -1082,13 +1120,14 @@ async function loadMarketIssues() {
       list.innerHTML = `<div class="error-box"><div><div class="title">${L().loadFailed}</div>${data.error}</div></div>`;
       return;
     }
-    _marketItems = data;
-    render_market(data);
+    _marketItems = data.items;
+    render_market(data.items);
+    render_sentiment_panel(data.daily_sentiment || []);
     list.dataset.loaded = '1';
-    document.getElementById('marketCount').textContent = L().videosCount(data.length);
+    document.getElementById('marketCount').textContent = L().videosCount(data.items.length);
     const badge = document.getElementById('marketBadge');
-    badge.textContent = data.length;
-    badge.style.display = data.length ? 'inline-block' : 'none';
+    badge.textContent = data.items.length;
+    badge.style.display = data.items.length ? 'inline-block' : 'none';
   } catch (e) {
     list.innerHTML = `<div class="error-box"><div><div class="title">${L().networkError}</div></div></div>`;
   } finally {
@@ -1111,6 +1150,7 @@ function render_market(list) {
         <img class="news-thumb" src="${v.thumbnail}" alt="" loading="lazy">
         <div class="news-body">
           <div class="news-meta">
+            ${v.sentiment ? `<span class="news-sentiment-dot sentiment-dot ${v.sentiment}" title="Market sentiment: ${v.sentiment}"></span>` : ''}
             <span class="news-channel">${v.channel_name}</span>
             <span>·</span>
             <span>${(v.published_at || '').slice(0, 10)}</span>
@@ -1121,6 +1161,26 @@ function render_market(list) {
         </div>
       </div>
       <div class="news-detail" id="nc${i}-detail"></div>
+    </div>`;
+  }).join('');
+}
+
+function render_sentiment_panel(days) {
+  const el = document.getElementById('sentimentDays');
+  if (!days.length) { el.innerHTML = '<p class="empty" style="padding:4px 0;font-size:12px">No data yet.</p>'; return; }
+  el.innerHTML = days.map(d => {
+    const total = d.total || 1;
+    const pct = n => (n / total * 100).toFixed(1);
+    return `
+    <div class="sentiment-day" title="${d.positive} positive · ${d.negative} negative · ${d.neutral} neutral">
+      <span class="sentiment-dot ${d.label}"></span>
+      <span class="sentiment-day-date">${d.day.slice(5)}</span>
+      <span class="sentiment-day-bar">
+        <span class="seg-pos" style="width:${pct(d.positive)}%"></span>
+        <span class="seg-neg" style="width:${pct(d.negative)}%"></span>
+        <span class="seg-neu" style="width:${pct(d.neutral)}%"></span>
+      </span>
+      <span class="sentiment-day-count">${d.total}</span>
     </div>`;
   }).join('');
 }
@@ -1180,6 +1240,7 @@ async function toggleNewsCard(idx) {
     v.title_en = res.title_en;
     v.summary = res.summary;
     v.summary_en = res.summary_en;
+    v.sentiment = res.sentiment;
     const newSummary = marketSummary(v);
     detail.innerHTML = renderNewsDetail(v, newSummary);
     const previewEl = card.querySelector('.news-preview');

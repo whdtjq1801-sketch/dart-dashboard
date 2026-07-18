@@ -3,10 +3,10 @@
 Fetches each configured YouTube channel's latest uploads (RSS, no API key
 needed), skips videos already in the video_summaries table, and for every
 new video: pulls the Korean transcript, summarizes it with GPT (English
-title + English summary + Korean summary, in one call), and stores the
-result. Also backfills title_en/summary_en for any older row that only has
-the Korean fields (from before the English-first switch), by translating
-the stored content instead of re-fetching the transcript.
+title + English summary + Korean summary + market sentiment label, in one
+call), and stores the result. Also backfills title_en/summary_en/sentiment
+for any older row missing them (from before those fields existed), by
+working from the stored content instead of re-fetching the transcript.
 
 The Flask app's /api/market-issues endpoint only ever reads from this
 table - it never calls YouTube or OpenAI itself - so this job is what
@@ -52,7 +52,9 @@ def backfill_missing_english():
     for r in rows:
         try:
             translated = translate_summary_to_english(r['channel_name'], r['title'], r['summary'])
-            update_video_summary_en(r['video_id'], translated['title_en'], translated['summary_en'])
+            update_video_summary_en(
+                r['video_id'], translated['title_en'], translated['summary_en'], translated['sentiment']
+            )
         except Exception as e:
             print(f"backfill failed for {r['video_id']}: {e}", flush=True)
 
@@ -78,7 +80,8 @@ def run():
                 result = summarize_video_bilingual(channel_name, v['title'], transcript)
                 save_video_summary(
                     v['video_id'], channel_name, v['title'], result['title_en'],
-                    v['published_at'], result['summary_ko'], result['summary_en']
+                    v['published_at'], result['summary_ko'], result['summary_en'],
+                    result['sentiment']
                 )
             except Exception as e:
                 # Leave it out of the table - next run will retry it.
