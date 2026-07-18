@@ -410,9 +410,14 @@ def get_daily_sentiment(days=14):
     result = []
     for r in rows:
         pos, neg, neu = r['positive'], r['negative'], r['neutral']
-        if pos > neg and pos >= neu:
+        # Most individual videos land on "neutral" (purely informational,
+        # no clear directional take), so requiring pos/neg to outnumber
+        # neutral made almost every day gray regardless of how lopsided
+        # the videos that DID take a side were. Compare pos vs neg only -
+        # neutral is "no opinion", not a competing stance.
+        if pos > neg:
             label = 'positive'
-        elif neg > pos and neg >= neu:
+        elif neg > pos:
             label = 'negative'
         else:
             label = 'neutral'
