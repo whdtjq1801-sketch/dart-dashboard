@@ -24,7 +24,8 @@ if sys.stdout.encoding.lower() != 'utf-8':
 
 from app import fetch_kospi_top_stocks, classify_sectors, get_existing_sectors, \
     save_kospi_snapshot, fetch_kospi_index, save_kospi_index_snapshot, \
-    fetch_kospi_fundamentals, fetch_kospi_investor_flows, KOSPI_HEATMAP_TOP_N
+    fetch_kospi_fundamentals, fetch_kospi_investor_flows, fetch_kospi_foreign_flows, \
+    KOSPI_HEATMAP_TOP_N
 
 
 def run():
@@ -65,6 +66,17 @@ def run():
         s['per'] = f.get('per')
         s['pbr'] = f.get('pbr')
         s['div_yield'] = f.get('div_yield')
+
+    try:
+        foreign_flows = fetch_kospi_foreign_flows([s['ticker'] for s in stocks])
+        print(f'foreign flows fetched for {len(foreign_flows)}/{len(stocks)} tickers', flush=True)
+    except Exception as e:
+        print(f'could not fetch KRX foreign flows (net buy/ownership): {e}', flush=True)
+        foreign_flows = {}
+    for s in stocks:
+        ff = foreign_flows.get(s['ticker'], {})
+        s['foreign_net_buy'] = ff.get('foreign_net_buy')
+        s['foreign_ownership_pct'] = ff.get('foreign_ownership_pct')
 
     save_kospi_snapshot(stocks)
 

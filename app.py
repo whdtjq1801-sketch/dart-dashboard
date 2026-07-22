@@ -169,6 +169,8 @@ def init_db():
     ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS per NUMERIC(10,2);
     ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS pbr NUMERIC(10,2);
     ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS div_yield NUMERIC(6,2);
+    ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS foreign_net_buy BIGINT;
+    ALTER TABLE kospi_heatmap ADD COLUMN IF NOT EXISTS foreign_ownership_pct NUMERIC(5,2);
 
     CREATE TABLE IF NOT EXISTS kospi_index_snapshot (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -1144,6 +1146,47 @@ def fetch_kospi_fundamentals(tickers):
         }
     return out
 
+def fetch_kospi_foreign_flows(tickers):
+    """Per-ticker foreign-investor net buy value (KRW, today) and foreign
+    ownership % (of shares outstanding), keyed by ticker. Two separate KRX
+    endpoints via pykrx - net purchases by ticker, and the foreign
+    "exhaustion rate" (지분율) table. Same KRX login session as
+    fetch_kospi_fundamentals; only pulled for the given tickers to keep the
+    per-day payload small even though KRX returns the whole market."""
+    from pykrx import stock
+    from datetime import date, timedelta
+    net_df = None
+    own_df = None
+    for i in range(10):
+        day = (date.today() - timedelta(days=i)).strftime('%Y%m%d')
+        try:
+            candidate = stock.get_market_net_purchases_of_equities_by_ticker(day, day, 'KOSPI', '외국인')
+        except Exception:
+            continue
+        if candidate is not None and not candidate.empty:
+            net_df = candidate
+            break
+    for i in range(10):
+        day = (date.today() - timedelta(days=i)).strftime('%Y%m%d')
+        try:
+            candidate = stock.get_exhaustion_rates_of_foreign_investment(day, 'KOSPI')
+        except Exception:
+            continue
+        if candidate is not None and not candidate.empty:
+            own_df = candidate
+            break
+    out = {}
+    for ticker in tickers:
+        net_buy = None
+        if net_df is not None and ticker in net_df.index:
+            net_buy = int(net_df.loc[ticker, '순매수거래대금'])
+        own_pct = None
+        if own_df is not None and ticker in own_df.index:
+            own_pct = float(own_df.loc[ticker, '지분율'])
+        if net_buy is not None or own_pct is not None:
+            out[ticker] = {'foreign_net_buy': net_buy, 'foreign_ownership_pct': own_pct}
+    return out
+
 def fetch_kospi_index():
     """Latest KOSPI index level (KS11) and USD/KRW rate - the headline
     numbers a foreign reader wants before drilling into individual stocks.
@@ -1263,14 +1306,18 @@ def get_existing_sectors(tickers):
 
 def save_kospi_snapshot(stocks_with_sector):
     sql = """
-        INSERT INTO kospi_heatmap (ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO kospi_heatmap
+            (ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield,
+             foreign_net_buy, foreign_ownership_pct, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (ticker) DO UPDATE SET
             name = EXCLUDED.name,
             sector = COALESCE(EXCLUDED.sector, kospi_heatmap.sector),
             market_cap = EXCLUDED.market_cap, change_pct = EXCLUDED.change_pct,
             close_price = EXCLUDED.close_price,
             per = EXCLUDED.per, pbr = EXCLUDED.pbr, div_yield = EXCLUDED.div_yield,
+            foreign_net_buy = EXCLUDED.foreign_net_buy,
+            foreign_ownership_pct = EXCLUDED.foreign_ownership_pct,
             updated_at = CURRENT_TIMESTAMP
     """
     tickers = [s['ticker'] for s in stocks_with_sector]
@@ -1280,7 +1327,8 @@ def save_kospi_snapshot(stocks_with_sector):
                 cur.execute(sql, (
                     s['ticker'], s['name'], s['sector'],
                     s['market_cap'], s['change_pct'], s['close_price'],
-                    s.get('per'), s.get('pbr'), s.get('div_yield')
+                    s.get('per'), s.get('pbr'), s.get('div_yield'),
+                    s.get('foreign_net_buy'), s.get('foreign_ownership_pct')
                 ))
             # Drop anything that fell out of today's top-N so a stale market
             # cap from a stock that's no longer in it can't outrank a
@@ -1614,7 +1662,8 @@ def api_kospi_heatmap():
         return jsonify({'error': 'Please sign in with your email first.'}), 401
     try:
         sql = """
-            SELECT ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield, updated_at
+            SELECT ticker, name, sector, market_cap, change_pct, close_price, per, pbr, div_yield,
+                   foreign_net_buy, foreign_ownership_pct, updated_at
             FROM kospi_heatmap
             ORDER BY market_cap DESC
             LIMIT %s
@@ -1634,6 +1683,8 @@ def api_kospi_heatmap():
             'per':         float(r['per']) if r['per'] is not None else None,
             'pbr':         float(r['pbr']) if r['pbr'] is not None else None,
             'div_yield':   float(r['div_yield']) if r['div_yield'] is not None else None,
+            'foreign_net_buy':       r['foreign_net_buy'],
+            'foreign_ownership_pct': float(r['foreign_ownership_pct']) if r['foreign_ownership_pct'] is not None else None,
         } for r in rows]
         updated_at = rows[0]['updated_at'].isoformat() if rows else None
 

@@ -765,7 +765,7 @@ const TIP_CONTENT = {
     steps: [
       'Same top-80 KOSPI list as the Heatmap, as a sortable table',
       'Click a column header to sort · use search/sector to filter',
-      'P/E, P/B, and dividend yield update once daily from KRX',
+      'P/E, P/B, dividend yield, and foreign net buy/ownership update once daily from KRX',
     ],
   },
   dart: {
@@ -1663,12 +1663,20 @@ function showHeatmapTip(evt, ticker) {
   const chg = Number(s.change_pct) || 0;
   const marketCapUsd = _usdKrw ? ` (~$${(s.market_cap / _usdKrw / 1e9).toFixed(2)}B)` : '';
   const closeUsd = _usdKrw ? ` (~$${(s.close_price / _usdKrw).toFixed(2)})` : '';
+  let foreignRow = '';
+  if (s.foreign_net_buy != null || s.foreign_ownership_pct != null) {
+    const fNet = s.foreign_net_buy;
+    const fNetText = fNet != null ? `${fNet >= 0 ? '+' : '-'}${(Math.abs(fNet) / 1e9).toFixed(1)}B KRW` : '—';
+    const fOwnText = s.foreign_ownership_pct != null ? `${s.foreign_ownership_pct.toFixed(1)}%` : '—';
+    foreignRow = `<div class="t-row">Foreign: ${fNetText} net · ${fOwnText} owned</div>`;
+  }
   const tip = document.getElementById('heatmapTooltip');
   tip.innerHTML = `<div class="t-name">${s.name_en || s.name}</div>
     <div class="t-row">${s.sector}</div>
     <div class="t-row">Change: ${chg > 0 ? '+' : ''}${chg.toFixed(2)}%</div>
     <div class="t-row">Market cap: ${(s.market_cap / 1e12).toFixed(2)}T KRW${marketCapUsd}</div>
-    <div class="t-row">Close: ${s.close_price.toLocaleString()} KRW${closeUsd}</div>`;
+    <div class="t-row">Close: ${s.close_price.toLocaleString()} KRW${closeUsd}</div>
+    ${foreignRow}`;
   tip.classList.add('show');
   moveHeatmapTip(evt);
 }
@@ -1771,6 +1779,8 @@ const SCREENER_COLUMNS = [
   { key: 'per',         label: 'P/E' },
   { key: 'pbr',         label: 'P/B' },
   { key: 'div_yield',   label: 'Div Yield' },
+  { key: 'foreign_net_buy',       label: 'Foreign Net' },
+  { key: 'foreign_ownership_pct', label: 'Foreign %' },
 ];
 
 function renderScreenerTable() {
@@ -1823,6 +1833,9 @@ function renderScreenerTable() {
     const chgCls = chg > 0 ? 'screener-chg-up' : chg < 0 ? 'screener-chg-down' : '';
     const chgText = `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`;
     const capUsd = _usdKrw ? ` <span class="screener-ticker">(~$${(it.market_cap / _usdKrw / 1e9).toFixed(1)}B)</span>` : '';
+    const fNet = it.foreign_net_buy;
+    const fNetCls = fNet == null ? '' : fNet >= 0 ? 'screener-chg-up' : 'screener-chg-down';
+    const fNetText = fNet == null ? '—' : `${fNet >= 0 ? '+' : '-'}${(Math.abs(fNet) / 1e9).toFixed(1)}B KRW`;
     return `<tr>
       <td class="screener-rank">${i + 1}</td>
       <td>${it.name_en || it.name}<div class="screener-ticker">${it.ticker}</div></td>
@@ -1833,6 +1846,8 @@ function renderScreenerTable() {
       <td>${it.per != null ? it.per.toFixed(1) : '—'}</td>
       <td>${it.pbr != null ? it.pbr.toFixed(2) : '—'}</td>
       <td>${it.div_yield != null ? it.div_yield.toFixed(2) + '%' : '—'}</td>
+      <td class="${fNetCls}">${fNetText}</td>
+      <td>${it.foreign_ownership_pct != null ? it.foreign_ownership_pct.toFixed(1) + '%' : '—'}</td>
     </tr>`;
   }).join('');
 
