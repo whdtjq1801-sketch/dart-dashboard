@@ -24,7 +24,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
 
 from app import fetch_kospi_top_stocks, classify_sectors, get_existing_sectors, \
     save_kospi_snapshot, fetch_kospi_index, save_kospi_index_snapshot, \
-    fetch_kospi_fundamentals, KOSPI_HEATMAP_TOP_N
+    fetch_kospi_fundamentals, fetch_kospi_investor_flows, KOSPI_HEATMAP_TOP_N
 
 
 def run():
@@ -70,6 +70,10 @@ def run():
 
     try:
         idx = fetch_kospi_index()
+        try:
+            idx.update(fetch_kospi_investor_flows())
+        except Exception as e:
+            print(f'could not fetch KRX investor flows: {e}', flush=True)
         save_kospi_index_snapshot(idx)
         print(f"KOSPI {idx['kospi_close']:.2f} ({idx['kospi_change_pct']:+.2f}%), USD/KRW {idx['usd_krw']:.2f}", flush=True)
     except Exception as e:

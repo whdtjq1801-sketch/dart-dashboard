@@ -361,6 +361,8 @@ button.action:disabled { opacity: .5; cursor: default; }
 .heatmap-index-bar .idx-up   { color: #c0392b; font-weight: 700; }
 .heatmap-index-bar .idx-down { color: #2a78d6; font-weight: 700; }
 .heatmap-index-bar .idx-fx   { color: var(--muted); margin-left: auto; }
+.heatmap-index-bar .idx-flow { display: inline-flex; align-items: center; gap: 5px; padding-left: 18px; border-left: 1px solid var(--line); }
+.heatmap-index-bar .idx-flow-label { color: var(--muted); font-size: 11.5px; }
 .heatmap-container { flex: 1; position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .heatmap-sector-label {
   position: absolute; top: 0; left: 0; right: 0; height: 20px; font-size: 10.5px; font-weight: 700;
@@ -475,6 +477,7 @@ button.action:disabled { opacity: .5; cursor: default; }
   .heatmap-container { flex: none; height: 1100px; overflow: visible; }
   .heatmap-index-bar { flex-wrap: wrap; }
   .heatmap-index-bar .idx-fx { margin-left: 0; flex-basis: 100%; }
+  .heatmap-index-bar .idx-flow { border-left: none; padding-left: 0; }
 
   .news-body-row { flex-direction: column; }
   .news-list { max-width: none; min-width: 0; }
@@ -671,7 +674,7 @@ button.action:disabled { opacity: .5; cursor: default; }
         </div>
         <div class="about-item">
           <div class="about-item-title">🗺️ KOSPI Heatmap</div>
-          <p>The top 80 KOSPI stocks by market cap, grouped by sector, colored by today's move. Prices and market caps are shown with a live USD conversion alongside KRW.</p>
+          <p>The top 80 KOSPI stocks by market cap, grouped by sector, colored by today's move. Prices and market caps are shown with a live USD conversion alongside KRW. The bar above the map also shows foreign/individual/institution net buying or selling for the day.</p>
         </div>
       </div>
       <p class="about-lead" style="margin-top:22px">No password, no spam - just an email to save your own watchlist. Everything else is open to browse.</p>
@@ -754,6 +757,7 @@ const TIP_CONTENT = {
     steps: [
       'Top 80 KOSPI stocks by market cap, grouped by sector',
       'Box size = market cap · color = today\'s % change (red = up, blue = down) · tap a box for details',
+      'Bar above the map: Foreign/Individual/Institutions net buy(▲)/sell(▼) for the whole KOSPI market today',
     ],
   },
   screener: {
@@ -1424,10 +1428,26 @@ function renderIndexBar(idx) {
   const up = idx.kospi_change_pct >= 0;
   const cls = up ? 'idx-up' : 'idx-down';
   const arrow = up ? '▲' : '▼';
+
+  const flow = (label, net) => {
+    if (net === null || net === undefined) return '';
+    const buying = net >= 0;
+    const flowCls = buying ? 'idx-up' : 'idx-down';
+    const flowArrow = buying ? '▲' : '▼';
+    const trillions = (Math.abs(net) / 1e12).toFixed(2);
+    return `<span class="idx-flow" title="Net ${buying ? 'buying' : 'selling'} today"><span class="idx-flow-label">${label}</span><span class="${flowCls}">${flowArrow} ${trillions}T</span></span>`;
+  };
+  const flows = [
+    flow('Foreign', idx.foreign_net),
+    flow('Individual', idx.individual_net),
+    flow('Institutions', idx.institution_net),
+  ].join('');
+
   bar.innerHTML = `
     <span class="idx-name">KOSPI</span>
     <span>${idx.kospi_close.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
     <span class="${cls}">${arrow} ${up ? '+' : ''}${idx.kospi_change_pct.toFixed(2)}% (${up ? '+' : ''}${idx.kospi_change_points.toFixed(2)})</span>
+    ${flows}
     <span class="idx-fx">1 USD = ${idx.usd_krw.toLocaleString(undefined, {maximumFractionDigits:2})} KRW</span>`;
   bar.style.display = 'flex';
 }

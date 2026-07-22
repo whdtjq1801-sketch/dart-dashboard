@@ -180,6 +180,10 @@ def init_db():
         CHECK (id = 1)
     );
 
+    ALTER TABLE kospi_index_snapshot ADD COLUMN IF NOT EXISTS foreign_net BIGINT;
+    ALTER TABLE kospi_index_snapshot ADD COLUMN IF NOT EXISTS individual_net BIGINT;
+    ALTER TABLE kospi_index_snapshot ADD COLUMN IF NOT EXISTS institution_net BIGINT;
+
     CREATE TABLE IF NOT EXISTS site_feedback (
         id BIGSERIAL PRIMARY KEY,
         user_key VARCHAR(255),
@@ -1158,24 +1162,55 @@ def fetch_kospi_index():
         'usd_krw':             float(fx.iloc[-1]['Close']),
     }
 
+def fetch_kospi_investor_flows():
+    """Whole-KOSPI-market net buy/sell (KRW) for foreign/individual/
+    institution investors on the latest trading day. pykrx treats the
+    market name itself ('KOSPI') as a pseudo-ticker for this endpoint to
+    mean "aggregate across the whole market" rather than one stock.
+    Requires the same KRX login session as fetch_kospi_fundamentals."""
+    from pykrx import stock
+    from datetime import date, timedelta
+    for i in range(10):
+        day = (date.today() - timedelta(days=i)).strftime('%Y%m%d')
+        try:
+            df = stock.get_market_trading_value_by_investor(day, day, 'KOSPI')
+        except Exception:
+            continue
+        if df is not None and not df.empty and '순매수' in df.columns:
+            return {
+                'foreign_net':     int(df.loc['외국인', '순매수']) if '외국인' in df.index else None,
+                'individual_net':  int(df.loc['개인', '순매수']) if '개인' in df.index else None,
+                'institution_net': int(df.loc['기관합계', '순매수']) if '기관합계' in df.index else None,
+            }
+    return {}
+
 def save_kospi_index_snapshot(data):
     sql = """
-        INSERT INTO kospi_index_snapshot (id, kospi_close, kospi_change_pct, kospi_change_points, usd_krw, updated_at)
-        VALUES (1, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO kospi_index_snapshot
+            (id, kospi_close, kospi_change_pct, kospi_change_points, usd_krw,
+             foreign_net, individual_net, institution_net, updated_at)
+        VALUES (1, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (id) DO UPDATE SET
             kospi_close = EXCLUDED.kospi_close, kospi_change_pct = EXCLUDED.kospi_change_pct,
             kospi_change_points = EXCLUDED.kospi_change_points, usd_krw = EXCLUDED.usd_krw,
+            foreign_net = EXCLUDED.foreign_net, individual_net = EXCLUDED.individual_net,
+            institution_net = EXCLUDED.institution_net,
             updated_at = CURRENT_TIMESTAMP
     """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (
                 data['kospi_close'], data['kospi_change_pct'],
-                data['kospi_change_points'], data['usd_krw']
+                data['kospi_change_points'], data['usd_krw'],
+                data.get('foreign_net'), data.get('individual_net'), data.get('institution_net')
             ))
 
 def get_kospi_index_snapshot():
-    sql = "SELECT kospi_close, kospi_change_pct, kospi_change_points, usd_krw, updated_at FROM kospi_index_snapshot WHERE id = 1"
+    sql = """
+        SELECT kospi_close, kospi_change_pct, kospi_change_points, usd_krw,
+               foreign_net, individual_net, institution_net, updated_at
+        FROM kospi_index_snapshot WHERE id = 1
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -1611,6 +1646,9 @@ def api_kospi_heatmap():
                     'kospi_change_pct':    float(idx_row['kospi_change_pct']),
                     'kospi_change_points': float(idx_row['kospi_change_points']),
                     'usd_krw':             float(idx_row['usd_krw']),
+                    'foreign_net':     idx_row['foreign_net'],
+                    'individual_net':  idx_row['individual_net'],
+                    'institution_net': idx_row['institution_net'],
                 }
         except Exception as e:
             print(f'get_kospi_index_snapshot failed: {e}', flush=True)
