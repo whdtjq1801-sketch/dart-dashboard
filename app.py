@@ -473,6 +473,15 @@ def get_trending_topics(days=14, limit=15):
 def download_corp_codes():
     resp = http.get('https://opendart.fss.or.kr/api/corpCode.xml',
                     params={'crtfc_key': DART_API_KEY}, timeout=30)
+    if not resp.content.startswith(b'PK'):
+        # DART returns a small XML error body (not a zip) when the key is
+        # bad or - as seen 2026-10-10 - the service is down for
+        # maintenance. Surface that message instead of a raw BadZipFile.
+        try:
+            msg = ET.fromstring(resp.content).findtext('message')
+        except ET.ParseError:
+            msg = resp.text[:200]
+        raise RuntimeError(f'DART corpCode API did not return a file: {msg or "unknown error"}')
     with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
         with z.open('CORPCODE.xml') as f:
             tree = ET.parse(f)
@@ -500,7 +509,21 @@ def load_corp_codes():
         with open(TICKER_CACHE_FILE, 'r', encoding='utf-8') as f:
             ticker_map = json.load(f)
         return name_map, ticker_map
-    name_map, ticker_map = download_corp_codes()
+    try:
+        name_map, ticker_map = download_corp_codes()
+    except Exception as e:
+        # DART's corpCode API is occasionally down for maintenance (seen
+        # 2026-10-10). A stale cache - even past CACHE_MAX_DAYS - is far
+        # better than failing company lookups outright; the company list
+        # barely changes day to day.
+        if os.path.exists(CORP_CACHE_FILE) and os.path.exists(TICKER_CACHE_FILE):
+            print(f'DART corpCode download failed, using stale cache: {e}', flush=True)
+            with open(CORP_CACHE_FILE, 'r', encoding='utf-8') as f:
+                name_map = json.load(f)
+            with open(TICKER_CACHE_FILE, 'r', encoding='utf-8') as f:
+                ticker_map = json.load(f)
+            return name_map, ticker_map
+        raise
     with open(CORP_CACHE_FILE, 'w', encoding='utf-8') as f:
         json.dump(name_map, f, ensure_ascii=False)
     with open(TICKER_CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -1102,8 +1125,18 @@ def fetch_kospi_top_stocks(top_n=KOSPI_HEATMAP_TOP_N):
     always-running Flask process never calls it."""
     import FinanceDataReader as fdr
     kospi = fdr.StockListing('KOSPI')
-    desc = fdr.StockListing('KRX-DESC')[['Code', 'Industry']]
-    merged = kospi.merge(desc, on='Code', how='left')
+    try:
+        # KRX-DESC is a nice-to-have (just a GPT sector-classification
+        # hint for brand-new tickers) - if this endpoint breaks, the core
+        # market cap/price/change data the whole job exists for shouldn't
+        # be lost along with it. GPT already classifies mostly from the
+        # company name itself.
+        desc = fdr.StockListing('KRX-DESC')[['Code', 'Industry']]
+        merged = kospi.merge(desc, on='Code', how='left')
+    except Exception as e:
+        print(f'KRX-DESC industry hint unavailable, continuing without it: {e}', flush=True)
+        merged = kospi.copy()
+        merged['Industry'] = None
     top = merged.sort_values('Marcap', ascending=False).head(top_n)
     return [{
         'ticker':        r['Code'],
@@ -1193,10 +1226,20 @@ def fetch_kospi_index():
     Same lazy-import rationale as fetch_kospi_top_stocks."""
     import FinanceDataReader as fdr
     from datetime import date, timedelta
-    start = date.today() - timedelta(days=10)
     end = date.today()
-    idx = fdr.DataReader('KS11', start, end)
-    fx = fdr.DataReader('USD/KRW', start, end)
+    # A plain 10-day window used to be plenty, but FDR's KS11 feed has gone
+    # stale for weeks at a time (seen 2026-09-17 to 2026-10-10) without
+    # ever raising - it just silently stops returning new rows. Widen the
+    # window so a few stale/holiday days don't crash this, but still
+    # refuse a too-old datapoint rather than quietly reporting a 3-week-old
+    # close as "today's" KOSPI level.
+    idx = fdr.DataReader('KS11', end - timedelta(days=30), end)
+    if idx.empty:
+        raise RuntimeError('FDR KS11 feed returned no data in the last 30 days')
+    last_date = idx.index[-1].date()
+    if (end - last_date).days > 5:
+        raise RuntimeError(f'FDR KS11 feed is stale (latest datapoint is {last_date}, {(end - last_date).days} days old)')
+    fx = fdr.DataReader('USD/KRW', end - timedelta(days=10), end)
     last = idx.iloc[-1]
     return {
         'kospi_close':         float(last['Close']),
@@ -1397,7 +1440,10 @@ def api_add_company():
     except Exception as e:
         print(f'ensure_user/save_search_log failed: {e}', flush=True)
 
-    name_map, ticker_map = load_corp_codes()
+    try:
+        name_map, ticker_map = load_corp_codes()
+    except Exception as e:
+        return jsonify({'error': f'DART company lookup is temporarily unavailable. Please try again shortly. ({e})'}), 503
     stock_cache  = load_json_cache(STOCK_CACHE_FILE)
     eng_name_map = load_json_cache(ENG_NAME_CACHE_FILE)
 
@@ -1444,7 +1490,10 @@ def api_company_financials(name):
     if rate_limited(rate_limit_key(), max_calls=20, window_sec=60):
         return jsonify({'error': 'Too many requests. Please wait a minute and try again.'}), 429
 
-    name_map, _ticker_map = load_corp_codes()
+    try:
+        name_map, _ticker_map = load_corp_codes()
+    except Exception as e:
+        return jsonify({'error': f'DART company lookup is temporarily unavailable. Please try again shortly. ({e})'}), 503
     corp_code = name_map.get(name)
     if not corp_code:
         return jsonify({'error': f'Unknown company "{name}".'}), 404
